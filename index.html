@@ -270,21 +270,28 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .credit { right: 50%; transform: translateX(50%); justify-items: center; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
 }
 
-/* the "?" card: a code to open QR Beam on a phone, and the steps */
-.help { padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: auto; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35); }
-.help::backdrop { background: rgba(8, 12, 16, 0.62); }
-.help-in { position: relative; display: grid; gap: 22px; padding: 24px 20px 20px; }
+/* the "?" card. The dialog is a clear full-screen layer: the dimming is the
+   shadow around a hole cut over the home monitor, so the moving code stays
+   lit, and an arrow runs from the card to it. app.js places all three. */
+.help { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ink); overflow: hidden; touch-action: none; }
+.help::backdrop { background: transparent; }
+.help-hole { position: fixed; border-radius: 14px; box-shadow: 0 0 0 2px var(--accent), 0 0 0 200vmax rgba(8, 12, 16, 0.66); pointer-events: none; }
+.help.no-spot .help-hole { left: 50%; top: 50%; width: 0; height: 0; box-shadow: 0 0 0 200vmax rgba(8, 12, 16, 0.66); }
+.help-arrow { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.help-arrow path { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.help.no-spot .help-arrow { display: none; }
+.help-in { position: fixed; left: 50%; transform: translateX(-50%); width: min(440px, calc(100vw - 32px)); overflow: auto; overscroll-behavior: contain; touch-action: pan-y; display: grid; gap: 20px; padding: 24px 20px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35); }
+.help.no-spot .help-in { top: 50%; transform: translate(-50%, -50%); max-height: calc(100% - 32px); }
 .help-x { position: absolute; top: 8px; right: 8px; }
 .help h2 { font-size: 1.15rem; }
-.help-scan { display: grid; justify-items: center; gap: 10px; text-align: center; }
-.help-scan canvas { display: block; background: #ffffff; border-radius: 10px; image-rendering: pixelated; }
-.help-scan p { max-width: 30ch; font-size: 0.92rem; }
+.help-scan { display: grid; gap: 8px; }
+.help-scan p { font-size: 0.92rem; }
+.help-scan .mono { overflow-wrap: anywhere; }
 .help-how { display: grid; gap: 14px; align-content: start; }
 .help .steps li { color: var(--ink); }
 @media (min-width: 700px) {
-  .help { width: min(780px, calc(100vw - 48px)); }
-  .help-in { grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 28px; align-items: start; }
-  .help-scan { padding-right: 28px; border-right: 1px solid var(--line); }
+  .help-in { width: min(720px, calc(100vw - 48px)); grid-template-columns: 190px minmax(0, 1fr); gap: 28px; padding: 28px; align-items: start; }
+  .help-scan { padding-right: 24px; border-right: 1px solid var(--line); }
 }
 
 @media (max-width: 420px) {
@@ -489,17 +496,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <button class="x credit-x" id="credit-x" type="button" aria-label="Close">×</button>
     <canvas id="credit-qr" width="1" height="1" aria-label="QR code for SNAPPERJAKE's link"></canvas>
     <p>Made by SNAPPERJAKE</p>
-    <a id="credit-link" href="#" target="_blank" rel="noopener noreferrer">Open the link</a>
+    <a id="credit-link" href="#" target="_blank" rel="noopener noreferrer">github.com/SNAPPERJAKE</a>
   </div>
   <button class="credit-btn" id="credit-btn" type="button" aria-expanded="false" aria-controls="credit-pop">Made by <b>SNAPPERJAKE</b></button>
 </div>
 <dialog class="help" id="help" aria-label="How to use QR Beam">
-  <div class="help-in">
+  <div class="help-hole" id="help-hole" aria-hidden="true"></div>
+  <svg class="help-arrow" id="help-arrow" aria-hidden="true"><path id="help-line"/><path id="help-head"/></svg>
+  <div class="help-in" id="help-card">
     <button class="x help-x" id="help-x" type="button" aria-label="Close">×</button>
-    <section class="help-scan" aria-labelledby="scan-title">
+    <section class="help-scan" id="help-scan" aria-labelledby="scan-title">
       <h2 id="scan-title">Scan</h2>
-      <canvas id="help-qr" width="1" height="1" aria-label="QR code that opens QR Beam"></canvas>
-      <p>Point your phone's camera here to open QR Beam on it.</p>
+      <p>Point your phone's camera at the moving code on this page. Every frame of it opens QR Beam.</p>
       <p class="small mono">snapperjake.github.io/qrbeam</p>
     </section>
     <section class="help-how">

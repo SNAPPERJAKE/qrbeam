@@ -17,8 +17,9 @@ On the receiver, a grid shows one square per piece of the file, lit as each piec
 it chimes (and buzzes, where the phone allows) when the file is complete. The home screen's
 animated code is the link to the site itself: it keeps changing pattern, but any phone camera
 pointed at it opens QR Beam.
-On the home screen, the **?** button (bottom left) opens a short how-to next to a big code that
-opens QR Beam on a phone, and the palette button (bottom right) has color, light/dark theme and the chime.
+On the home screen, the **?** button (bottom left) opens a short how-to; the page dims except the
+moving code, with an arrow pointing at it. The palette button (bottom right) has color, light/dark
+theme and the chime. The **Made by** badge's code opens github.com/SNAPPERJAKE.
 
 **Lock-on:** the receiver no longer needs the code centred or filling a box. It searches the whole
 camera view, and once it reads a code it scans only a tight box around it at full resolution

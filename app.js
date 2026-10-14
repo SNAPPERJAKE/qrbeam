@@ -1605,7 +1605,7 @@
   }
 
   // ===================== "Made by" badge =====================
-  const CREDIT_URL = 'https://www.youtube.com/watch?v=DLzxrzFCyOs&list=RDDLzxrzFCyOs&start_radio=1&pp=ygULcmljayBhc3RsZXmgBwHSBwkJPwwBhyohjO8%3D';
+  const CREDIT_URL = 'https://github.com/SNAPPERJAKE';
   const creditPop = $('#credit-pop'), creditBtn = $('#credit-btn');
   $('#credit-link').href = CREDIT_URL;
   function setCredit(open) {
@@ -1621,17 +1621,63 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !creditPop.hidden) setCredit(false); });
 
   // ===================== home: "?" help and look and sound =====================
-  const help = $('#help'), lookPop = $('#look-pop'), lookBtn = $('#look-btn');
+  // The card sits under the home animation. Everything dims except the
+  // monitor, and an arrow runs from the card's Scan part to it: that moving
+  // code is the one to scan. With no room under the animation (a phone on its
+  // side) the card centres and the whole page dims instead.
+  const help = $('#help'), helpCard = $('#help-card'), helpHole = $('#help-hole');
+  const lookPop = $('#look-pop'), lookBtn = $('#look-btn');
+  const pt = (p) => Math.round(p[0]) + ',' + Math.round(p[1]);
+  function layoutHelp() {
+    if (!help.open) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let M = null; // the monitor, bezel and stand, with a margin
+    if (heroLayout()) {
+      const r = hero.getBoundingClientRect(), S = hs.L.screen;
+      M = { x: r.left + S.x - 8, y: r.top + S.y - 8, w: S.w + 16, h: S.h + 19 + 16 };
+    }
+    // Arrow out of the card's left side when there's room for its loop, else straight up.
+    const side = (vw - helpCard.offsetWidth) / 2 >= 150;
+    const top = M ? M.y + M.h + (side ? 24 : 48) : 0;
+    const room = vh - top - 12;
+    const spot = M && M.y >= 0 && room >= 240;
+    help.classList.toggle('no-spot', !spot);
+    if (!spot) { helpCard.style.top = helpCard.style.maxHeight = ''; return; }
+    helpCard.style.top = top + 'px';
+    helpCard.style.maxHeight = room + 'px';
+    Object.assign(helpHole.style, { left: M.x + 'px', top: M.y + 'px', width: M.w + 'px', height: M.h + 'px' });
+
+    const card = helpCard.getBoundingClientRect(), scan = $('#help-scan').getBoundingClientRect();
+    let a, b, c1, c2;
+    if (side) {
+      a = [card.left - 8, scan.top + scan.height * 0.4];
+      b = [M.x - 8, M.y + M.h * 0.42];
+      c1 = [a[0] - 120, a[1]]; c2 = [b[0] - 120, b[1]];
+    } else {
+      a = [scan.left + scan.width / 2, card.top - 8];
+      b = [M.x + M.w / 2, M.y + M.h + 6];
+      const k = (a[1] - b[1]) * 0.5;
+      c1 = [a[0], a[1] - k]; c2 = [b[0], b[1] + k];
+    }
+    $('#help-line').setAttribute('d', `M${pt(a)} C${pt(c1)} ${pt(c2)} ${pt(b)}`);
+    const t = Math.atan2(b[1] - c2[1], b[0] - c2[0]), L = 13;
+    const wing = (d) => [b[0] + Math.cos(t + d) * L, b[1] + Math.sin(t + d) * L];
+    $('#help-head').setAttribute('d', `M${pt(wing(2.6))} L${pt(b)} L${pt(wing(-2.6))}`);
+  }
   $('#help-btn').onclick = () => {
     setLook(false);
-    // a big code on a computer, a smaller one on a phone (where it's for a second phone)
-    paintQR($('#help-qr'), HOME_URL, window.innerWidth >= 700 ? 230 : 180, 4);
+    window.scrollTo(0, 0); // the monitor has to be on screen to point at it
+    document.documentElement.style.overflow = 'hidden';
     if (help.showModal) help.showModal(); else help.setAttribute('open', '');
+    layoutHelp();
   };
   function closeHelp() { if (help.close) help.close(); else help.removeAttribute('open'); }
+  help.addEventListener('close', () => { document.documentElement.style.overflow = ''; });
   $('#help-x').onclick = closeHelp;
-  // the card fills the dialog, so a click that lands on the dialog itself is on the backdrop
+  // the dialog itself is the dimmed layer, so a click that lands on it is outside the card
   help.addEventListener('click', (e) => { if (e.target === help) closeHelp(); });
+  window.addEventListener('resize', layoutHelp);
+  window.addEventListener('scroll', layoutHelp, { passive: true });
 
   function setLook(open) {
     lookPop.hidden = !open;
