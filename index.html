@@ -197,6 +197,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .swatches input:checked + label { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--sw); }
 .swatches input:focus-visible + label { outline: 3px solid var(--ink); outline-offset: 3px; }
 .seg.three { grid-template-columns: repeat(3, 1fr); min-width: 210px; }
+.seg.two { grid-template-columns: repeat(2, 1fr); }
 .seg.three label { padding: 7px 10px; font-size: 0.9rem; font-weight: 600; }
 .switch { position: relative; width: 48px; height: 28px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
@@ -398,6 +399,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
         <input type="radio" name="density" id="d-max" value="max"><label for="d-max"><b>Max</b><span>1.6 KB</span></label>
       </div>
       <p class="small">Bytes per frame. Use Easy when a laptop webcam is reading a phone screen. A phone camera reading a big monitor can handle Dense or Max.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Codes on screen</legend>
+      <div class="seg two">
+        <input type="radio" name="codes" id="c-1" value="1"><label for="c-1"><b>1 code</b><span>easiest to aim</span></label>
+        <input type="radio" name="codes" id="c-2" value="2"><label for="c-2"><b>2 codes</b><span>about 1.75× faster</span></label>
+      </div>
+      <p class="small">Two codes side by side suit a big screen; the receiver has to fit both in view. You can switch while beaming with the button under the code.</p>
     </fieldset>
     <fieldset>
       <legend>Speed: <span class="mono" id="fps-label">10 frames/s</span></legend>

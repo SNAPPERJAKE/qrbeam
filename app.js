@@ -23,7 +23,10 @@
   if (typeof prefs.sound !== 'boolean') prefs.sound = true;
   if (!['original', 'large', 'small'].includes(prefs.photoSize)) prefs.photoSize = 'large';
   if (typeof prefs.twoWay !== 'boolean') prefs.twoWay = true;
-  if (![1, 2, 'auto'].includes(prefs.lanes)) prefs.lanes = 'auto';
+  // How many codes a send starts with, picked on the Send screen. (Replaces the
+  // old "lanes" setting, which also remembered mid-transfer switches.)
+  delete prefs.lanes;
+  if (![1, 2].includes(prefs.startCodes)) prefs.startCodes = 1;
   if (!['environment', 'user'].includes(prefs.rxFacing)) prefs.rxFacing = 'environment';
   function savePrefs() {
     try { localStorage.setItem('qrbeam', JSON.stringify(prefs)); } catch (e) { /* private mode */ }
@@ -802,6 +805,10 @@
     r.checked = r.value === prefs.density;
     r.addEventListener('change', () => { prefs.density = r.value; savePrefs(); updateEstimate(); });
   }
+  for (const r of document.querySelectorAll('input[name="codes"]')) {
+    r.checked = +r.value === prefs.startCodes;
+    r.addEventListener('change', () => { prefs.startCodes = +r.value; savePrefs(); updateEstimate(); });
+  }
   for (const r of document.querySelectorAll('input[name="photo"]')) {
     r.checked = r.value === prefs.photoSize;
     r.addEventListener('change', () => { prefs.photoSize = r.value; savePrefs(); renderFiles(); });
@@ -825,10 +832,11 @@
     const size = rawSize();
     const B = Beam.blockSizeFor(prefs.density, size);
     const need = framesNeeded(Math.ceil(size / B));
-    const fps = FPS_STEPS[prefs.fpsIdx];
-    const secs = need / (fps * 0.8);
-    let html = `<b>${fmtBytes(size)}</b> is about <b>${need}</b> frame${need === 1 ? '' : 's'}. ` +
-      `At ${fps}/s that takes roughly <b>${fmtTime(secs)}</b>, or less if it compresses or you show 2 codes at once.`;
+    const fps = FPS_STEPS[prefs.fpsIdx], two = prefs.startCodes === 2;
+    // two codes measured about 1.75x one code's speed (not 2x: the receiver misses a few more)
+    const secs = need / (fps * (two ? 1.75 : 1) * 0.8);
+    let html = `<b>${fmtBytes(size)}</b> is about <b>${need}</b> code${need === 1 ? '' : 's'}. ` +
+      `At ${fps}/s${two ? ' with 2 codes' : ''} that takes roughly <b>${fmtTime(secs)}</b>, or less if it compresses.`;
     if (items.some((it) => it.job)) html += ' <br>Shrinking photos…';
     if (size > MAX_SEND) html += ' <br><b>Too big.</b> The limit is 64 MB, and even that would take hours.';
     else if (secs > 600) html += ' <br>That is a long time to hold a camera still. QR Beam suits text, links, photos and files up to a few MB.';
@@ -876,11 +884,10 @@
     onText: onStatusText,
   });
 
-  // Two codes side by side when the screen is wide enough to keep them big.
+  // One code or two side by side: starts from the Send screen's choice, and the
+  // button under the code flips it for this transfer only.
   function lanesFor() {
-    if (prefs.lanes === 1 || prefs.lanes === 2) return prefs.lanes;
-    const w = qrWrap.clientWidth, h = qrWrap.clientHeight;
-    return w >= 900 && w / Math.max(1, h) >= 1.6 ? 2 : 1;
+    return sender ? sender.codes : prefs.startCodes;
   }
   function buildFrame() {
     const lanes = lanesFor();
@@ -924,7 +931,7 @@
     const tid = crypto.getRandomValues(new Uint32Array(1))[0];
     sender = {
       enc: new Beam.Encoder(payload, B, tid),
-      seed: 0, shown: 0, paused: false, nextAt: 0, modules: 0, raf: 0, lanes: 1,
+      seed: 0, shown: 0, paused: false, nextAt: 0, modules: 0, raf: 0, lanes: 1, codes: prefs.startCodes,
       twoWay: prefs.twoWay, listening: false, auto: false, delivered: false, started: performance.now(),
       link: { state: 'off', last: 0, st: null, lastAdjust: 0, error: '' },
     };
@@ -997,8 +1004,11 @@
     const n = lanesFor();
     $('#lanes').textContent = n === 2 ? '2 codes' : '1 code';
   }
-  $('#lanes').onclick = () => { prefs.lanes = lanesFor() === 2 ? 1 : 2; savePrefs(); updateLanesBtn(); };
-  window.addEventListener('resize', () => { if (sender) updateLanesBtn(); });
+  $('#lanes').onclick = () => {
+    if (!sender) return;
+    sender.codes = sender.codes === 2 ? 1 : 2;
+    updateLanesBtn();
+  };
   $('#pause').onclick = () => {
     if (!sender) return;
     sender.paused = !sender.paused;

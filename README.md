@@ -29,8 +29,9 @@ Orange corner brackets snap onto each code and tilt and stretch with it.
 **Photos** are shrunk before sending (Large = 2048 px, Small = 1280 px, or Original): a 3 MB phone
 photo becomes a few hundred KB, which is the difference between minutes and seconds.
 
-**Two codes at once:** on a wide screen the sender shows two codes side by side and the receiver
-reads both every frame (about 1.75x faster in testing). Toggle with the 1 code / 2 codes button.
+**Two codes at once:** pick **Codes on screen: 2 codes** on the Send screen (the default is 1) and
+the sender shows two codes side by side; the receiver reads both every frame (about 1.75x faster in
+testing). The 1 code / 2 codes button under the code switches mid-transfer, for that transfer only.
 
 **Two-way:** with the screens facing each other, each device uses its front camera. The receiver
 shows a small status code; the sender reads it to show the receiver's progress, speeds itself up

@@ -71,7 +71,7 @@ window.duo = {
   async run({ size = 60000, lanes = 1, twoWay = true, glitch = 0.1, timeout = 180000 } = {}) {
     const tx = $('tx'), rx = $('rx');
     // Both copies share this origin's storage, so one settings object serves both.
-    localStorage.setItem('qrbeam', JSON.stringify({ fpsIdx: 3, twoWay, lanes, density: 'normal', sound: false, rxFacing: 'environment' }));
+    localStorage.setItem('qrbeam', JSON.stringify({ fpsIdx: 3, twoWay, startCodes: lanes, density: 'normal', sound: false, rxFacing: 'environment' }));
     for (const f of [tx, rx]) if (f.contentWindow) f.contentWindow.__stale = true;
     tx.src = '../index.html?tx' + Date.now();
     rx.src = '../index.html?rx' + Date.now();
