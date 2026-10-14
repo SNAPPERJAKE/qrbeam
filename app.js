@@ -318,12 +318,13 @@
   const FLASH_MS = 700;
 
   function gridReset() {
-    grid.K = 0; grid.done = false;
+    grid.K = 0; grid.wantK = 0; grid.done = false;
     gridCanvas.style.height = '0px';
   }
   function gridInit(K) {
+    grid.wantK = K;
     const W = gridCanvas.clientWidth;
-    if (!W) return;
+    if (!W) return; // laid out later; the resize watcher below picks it up
     const maxH = Math.round(Math.min(150, Math.max(64, window.innerHeight * 0.16)));
     let L = null;
     for (let c = 18; c >= 3 && !L; c--) {
@@ -397,7 +398,16 @@
     grid.dirty = false;
     if (flashing) gridKick();
   }
-  window.addEventListener('resize', () => { if (grid.K && rx && rx.running) gridInit(grid.K); });
+  // The receive screen changes width (the two-way status code comes and goes,
+  // phones rotate), so re-lay the grid whenever its width does.
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => {
+      const K = grid.K || grid.wantK;
+      if (K && gridCanvas.clientWidth && Math.abs(gridCanvas.clientWidth - (grid.W || 0)) > 1) gridInit(K);
+    }).observe(gridCanvas);
+  } else {
+    window.addEventListener('resize', () => { if (grid.K) gridInit(grid.K); });
+  }
 
   function fmtBytes(n) {
     if (n < 1024) return n + ' B';
@@ -447,7 +457,13 @@
         const formats = await BarcodeDetector.getSupportedFormats();
         if (formats.includes('qr_code')) {
           const det = new BarcodeDetector({ formats: ['qr_code'] });
-          return { kind: 'native', slots: 2, scan: async (src) => (await det.detect(src)).map((r) => r.rawValue) };
+          return {
+            kind: 'native', slots: 2,
+            scan: async (src) => (await det.detect(src)).map((r) => ({
+              text: r.rawValue,
+              quad: r.cornerPoints && r.cornerPoints.length === 4 ? r.cornerPoints.flatMap((pt) => [pt.x, pt.y]) : null,
+            })),
+          };
         }
       } catch (e) { /* fall through to jsQR */ }
     }
@@ -460,7 +476,14 @@
       kind: 'main', slots: 1,
       scan: (img) => {
         const r = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-        return r ? [r.data] : [];
+        if (!r) return [];
+        const l = r.location;
+        return [{
+          text: r.data,
+          ver: r.version,
+          quad: [l.topLeftCorner.x, l.topLeftCorner.y, l.topRightCorner.x, l.topRightCorner.y,
+            l.bottomRightCorner.x, l.bottomRightCorner.y, l.bottomLeftCorner.x, l.bottomLeftCorner.y],
+        }];
       },
     };
   }
@@ -488,7 +511,7 @@
           }
           const res = waiting.get(m.id);
           waiting.delete(m.id);
-          if (res) res(m.text ? [m.text] : []);
+          if (res) res(m.text ? [{ text: m.text, quad: m.quad, ver: m.ver }] : []);
         };
         return w;
       });
@@ -608,16 +631,29 @@
     cam.stop = () => { cam.running = false; cam.gen++; stopTracks(); };
     cam.ended = () => !cam.stream || cam.stream.getVideoTracks().every((t) => t.readyState === 'ended');
 
+    // A crop may carry its own size limit (c.max): a locked-on code is read at
+    // full resolution, unscaled, since resampling costs sharpness right where
+    // the module edges need it.
     function grabCrop(c) {
-      const k = Math.min(1, scanMax / Math.max(c.w, c.h));
+      const big = Math.max(c.w, c.h);
+      const k = c.scale ? Math.min(c.scale, 1600 / big) : Math.min(1, (c.max || scanMax) / big);
       const w = Math.max(16, Math.round(c.w * k)), h = Math.max(16, Math.round(c.h * k));
       if (grab.width !== w || grab.height !== h) { grab.width = w; grab.height = h; }
       gctx.drawImage(video, c.x, c.y, c.w, c.h, 0, 0, w, h);
       return gctx.getImageData(0, 0, w, h);
     }
-    function dispatch(src, gen) {
+    // crop is where src came from in the video (null when src is the video).
+    function dispatch(src, gen, crop) {
       cam.inFlight++;
-      const done = (texts) => { cam.inFlight--; if (cam.running && cam.gen === gen) texts.forEach(onText); };
+      const k = crop ? src.width / crop.w : 1; // read before the pixels move to a worker
+      const done = (hits) => {
+        cam.inFlight--;
+        if (!cam.running || cam.gen !== gen) return;
+        for (const h of hits) {
+          const q = h.quad && crop ? h.quad.map((v, i) => v / k + (i % 2 ? crop.y : crop.x)) : h.quad;
+          onText(h.text, q, h.ver);
+        }
+      };
       try { Promise.resolve(scanner.scan(src)).then(done, () => done([])); } catch (e) { done([]); }
     }
     function loop(gen) {
@@ -634,7 +670,7 @@
         if (scanner.kind === 'native') { dispatch(video, gen); return; }
         for (const c of crops(video.videoWidth, video.videoHeight, cam.turn++)) {
           if (cam.inFlight >= scanner.slots) break;
-          dispatch(grabCrop(c), gen);
+          dispatch(grabCrop(c), gen, c);
         }
       }
       next();
@@ -1062,21 +1098,184 @@
   const statusCanvas = $('#status-qr'), statusTiny = document.createElement('canvas');
   let rx = null, statsTimer = 0;
 
-  // Which parts of the camera frame to decode. One code: the middle square.
-  // Two codes: a square over each half. Not locked on yet: take turns.
+  // ----- lock-on: remember where each code sits and follow it -----
+  const tracks = []; // { q: latest corners, s: drawn corners, last, hit } in video pixels
+  const TRACK_MS = 900; // a lock this long without a read is dropped
+  const LOCK_MAX = 1100; // locked-on crops up to this size are read unscaled
+  function quadCenter(q) { return [(q[0] + q[2] + q[4] + q[6]) / 4, (q[1] + q[3] + q[5] + q[7]) / 4]; }
+  function quadDiag(q) { return Math.max(Math.hypot(q[4] - q[0], q[5] - q[1]), Math.hypot(q[6] - q[2], q[7] - q[3])); }
+  function trackHit(q, ver) {
+    if (!q || q.length !== 8 || !q.every(Number.isFinite)) return;
+    const mods = ver ? 17 + 4 * ver : 0;
+    const now = performance.now(), [cx, cy] = quadCenter(q);
+    let best = null, bd = Infinity;
+    for (const t of tracks) {
+      const [tx, ty] = quadCenter(t.q), dist = Math.hypot(tx - cx, ty - cy);
+      if (dist < bd) { bd = dist; best = t; }
+    }
+    // Two codes side by side sit about 0.8 diagonals apart, so 0.6 tells them apart.
+    if (best && bd < quadDiag(q) * 0.6) {
+      best.q = q; best.last = now; best.hit = now;
+      if (mods) best.mods = mods;
+      return;
+    }
+    if (tracks.length >= 2) { tracks.sort((a, b) => a.last - b.last); tracks.shift(); }
+    tracks.push({ q, s: q.slice(), last: now, hit: now, mods });
+  }
+  function liveTracks(now) {
+    for (let i = tracks.length - 1; i >= 0; i--) if (now - tracks[i].last > TRACK_MS) tracks.splice(i, 1);
+    return tracks;
+  }
+  function quadBox(q) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < 8; i += 2) {
+      x0 = Math.min(x0, q[i]); x1 = Math.max(x1, q[i]);
+      y0 = Math.min(y0, q[i + 1]); y1 = Math.max(y1, q[i + 1]);
+    }
+    return { x0, y0, x1, y1 };
+  }
+  // A box around a locked code with room for a hand-held camera to drift.
+  // Being tight is the point: the code keeps its full sharpness instead of
+  // being shrunk along with the whole frame, and small crops decode faster.
+  // With two codes side by side, each box stops halfway across the gap, or
+  // the scanner sees pieces of both and reads neither.
+  function cropAround(q, vw, vh, others, mods) {
+    const b = quadBox(q);
+    const side = Math.max(b.x1 - b.x0, b.y1 - b.y0) * 1.6;
+    const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+    let x0 = Math.max(0, cx - side / 2), x1 = Math.min(vw, cx + side / 2);
+    let y0 = Math.max(0, cy - side / 2), y1 = Math.min(vh, cy + side / 2);
+    for (const o of others) {
+      // split at the midpoint between the two centres, along whichever axis
+      // separates them more (works for tilted codes whose outlines overlap)
+      const [ox, oy] = quadCenter(o);
+      if (Math.abs(ox - cx) >= Math.abs(oy - cy)) {
+        if (ox > cx) x1 = Math.min(x1, (cx + ox) / 2); else x0 = Math.max(x0, (cx + ox) / 2);
+      } else if (oy > cy) y1 = Math.min(y1, (cy + oy) / 2); else y0 = Math.max(y0, (cy + oy) / 2);
+    }
+    const w = x1 - x0, h = y1 - y0;
+    // Keep big crops affordable, but blow small codes up: the scanner wants
+    // about 5.5 px per module, and a far-off or small code can have under 4.
+    let scale = Math.min(1, LOCK_MAX / Math.max(w, h));
+    if (mods) {
+      const ppm = Math.hypot(q[2] - q[0], q[3] - q[1]) / mods;
+      if (ppm * scale < 5.5) scale = Math.min(2, 5.5 / ppm);
+    }
+    return { x: Math.round(x0), y: Math.round(y0), w: Math.round(w), h: Math.round(h), scale };
+  }
+  // The boxes to search in when nothing is locked yet.
+  function searchBoxes(vw, vh) {
+    const half = Math.min(vw / 2, vh) * 0.96;
+    return rx && rx.lanes === 2
+      ? [sq(vw / 4, vh / 2, half), sq((3 * vw) / 4, vh / 2, half)]
+      : [sq(vw / 2, vh / 2, Math.min(vw, vh) * CROP)];
+  }
+  // Which parts of the camera frame to decode. Locked on: a tight box around
+  // each code, plus a look at the whole view now and then. Not locked: take
+  // turns between the middle, the halves and the whole view.
   function rxCrops(vw, vh, turn) {
-    const mid = sq(vw / 2, vh / 2, Math.min(vw, vh) * CROP);
+    const full = { x: 0, y: 0, w: vw, h: vh };
     const half = Math.min(vw / 2, vh) * 0.96;
     const left = sq(vw / 4, vh / 2, half), right = sq((3 * vw) / 4, vh / 2, half);
-    const locked = rx && performance.now() - rx.lastHit < 1200;
-    if (locked && rx.lanes === 2) {
-      const list = turn % 2 ? [right, left] : [left, right];
-      if (turn % 6 === 5) list.unshift(mid); // notice if the sender goes back to one code
+    const live = liveTracks(performance.now());
+    if (live.length) {
+      const list = live.map((t) => cropAround(t.q, vw, vh, live.filter((o) => o !== t).map((o) => o.q), t.mods));
+      if (turn % 2) list.reverse();
+      const want = rx && rx.lanes === 2 ? 2 : 1;
+      if (live.length < want) list.push([left, right, full][turn % 3]); // find the other code
+      else if (turn % 10 === 9) list.push(full); // and notice if the layout changes
       return list;
     }
-    if (locked) return [mid];
-    const order = [mid, left, mid, right];
-    return order.slice(turn % 4).concat(order.slice(0, turn % 4));
+    const mid = sq(vw / 2, vh / 2, Math.min(vw, vh) * CROP);
+    const order = rx && rx.lanes === 2 ? [left, right, full, mid] : [mid, full, mid, left, mid, right];
+    const k = turn % order.length;
+    return order.slice(k).concat(order.slice(0, k));
+  }
+
+  // The camera overlay: while searching, the box to aim at with a slow scan
+  // line; once locked, corner brackets that sit on each code and tilt and
+  // stretch with it.
+  const overlay = $('#overlay'), octx = overlay.getContext('2d');
+  let overlayRaf = 0;
+  function overlayLoop() {
+    cancelAnimationFrame(overlayRaf);
+    const step = (now) => {
+      if (!rx || !rx.running) { overlayRaf = 0; return; }
+      overlayRaf = requestAnimationFrame(step);
+      drawOverlay(now);
+    };
+    overlayRaf = requestAnimationFrame(step);
+  }
+  function drawOverlay(now) {
+    const vw = video.videoWidth, vh = video.videoHeight, W = overlay.clientWidth, H = overlay.clientHeight;
+    if (!vw || !vh || !W || !H) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (overlay.width !== Math.round(W * dpr) || overlay.height !== Math.round(H * dpr)) {
+      overlay.width = Math.round(W * dpr);
+      overlay.height = Math.round(H * dpr);
+    }
+    const ctx = octx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const kx = W / vw, ky = H / vh, mirror = cam.classList.contains('mirror');
+    const X = (x) => (mirror ? vw - x : x) * kx, Y = (y) => y * ky;
+    const live = liveTracks(now);
+
+    if (!live.length) {
+      const boxes = searchBoxes(vw, vh).map((b) => ({ x: Math.min(X(b.x), X(b.x + b.w)), y: Y(b.y), w: b.w * kx, h: b.h * ky }));
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'destination-out';
+      for (const b of boxes) { roundRect(ctx, b.x, b.y, b.w, b.h, 10); ctx.fill(); }
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = 2;
+      for (const b of boxes) { roundRect(ctx, b.x, b.y, b.w, b.h, 10); ctx.stroke(); }
+      if (!reduceMotion.matches) {
+        const p = 0.5 - 0.5 * Math.cos(((now % 2200) / 2200) * 2 * Math.PI);
+        ctx.strokeStyle = colors.accent;
+        ctx.globalAlpha = 0.55;
+        ctx.lineWidth = 2;
+        for (const b of boxes) {
+          const y = b.y + 8 + (b.h - 16) * p;
+          ctx.beginPath(); ctx.moveTo(b.x + 10, y); ctx.lineTo(b.x + b.w - 10, y); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      return;
+    }
+
+    for (const t of live) {
+      for (let i = 0; i < 8; i++) t.s[i] += (t.q[i] - t.s[i]) * 0.35; // glide, don't jump
+      const [cx, cy] = quadCenter(t.s);
+      const P = [];
+      for (let i = 0; i < 8; i += 2) P.push([X(cx + (t.s[i] - cx) * 1.14), Y(cy + (t.s[i + 1] - cy) * 1.14)]);
+      const fade = Math.max(0, Math.min(1, (TRACK_MS - (now - t.last)) / 300));
+      const flash = Math.max(0, 1 - (now - t.hit) / 160);
+      ctx.globalAlpha = 0.13 * fade;
+      ctx.fillStyle = colors.accent;
+      ctx.beginPath();
+      P.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = fade;
+      ctx.strokeStyle = colors.accent;
+      ctx.lineWidth = 3.5 + flash * 1.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = colors.accent;
+      ctx.shadowBlur = 6 + flash * 10;
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const a = P[i], prev = P[(i + 3) % 4], next = P[(i + 1) % 4];
+        ctx.moveTo(a[0] + (prev[0] - a[0]) * 0.24, a[1] + (prev[1] - a[1]) * 0.24);
+        ctx.lineTo(a[0], a[1]);
+        ctx.lineTo(a[0] + (next[0] - a[0]) * 0.24, a[1] + (next[1] - a[1]) * 0.24);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
   }
   const rxCam = makeCamera(video, { scanMax: SCAN_MAX, crops: rxCrops, onText: handleText });
 
@@ -1104,8 +1303,8 @@
     $('#meter i').style.width = '0%';
     $('#recv-stats').innerHTML = '<span>waiting for the first frame</span>';
     $('#status-cap').textContent = 'Two-way: the sender reads this code to follow your progress and tune its speed.';
-    $('#cam-tip').textContent = 'Fill the box with the flashing code';
-    cam.classList.remove('lanes2', 'hit');
+    $('#cam-tip').textContent = 'Point at the flashing code';
+    tracks.length = 0;
     setHint('');
     rx = {
       running: true, decoder: null, recent: [], other: 0, started: 0, lastHit: 0,
@@ -1115,6 +1314,7 @@
     keepAwake(true);
     clearInterval(statsTimer);
     statsTimer = setInterval(renderRecvStats, 250);
+    overlayLoop();
     await openRxCamera();
   }
   async function openRxCamera(opts = {}) {
@@ -1137,25 +1337,17 @@
   }
   video.addEventListener('resize', layoutGuide);
 
+  // Size the camera box to the video's shape; the overlay draws to match.
   function layoutGuide() {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return;
     cam.style.setProperty('--ar', vw + ' / ' + vh);
     cam.style.setProperty('--arn', String(vw / vh));
-    const place = (el, c) => {
-      el.style.left = (c.x / vw) * 100 + '%';
-      el.style.top = (c.y / vh) * 100 + '%';
-      el.style.width = (c.w / vw) * 100 + '%';
-      el.style.height = (c.h / vh) * 100 + '%';
-      el.style.transform = 'none';
-    };
-    place($('#guide'), sq(vw / 2, vh / 2, Math.min(vw, vh) * CROP));
-    const half = Math.min(vw / 2, vh) * 0.96;
-    place($('#guide-l'), sq(vw / 4, vh / 2, half));
-    place($('#guide-r'), sq((3 * vw) / 4, vh / 2, half));
-    const two = !!rx && rx.lanes === 2;
-    cam.classList.toggle('lanes2', two);
-    $('#cam-tip').textContent = two ? 'Fit both codes in the frame (turn the phone sideways)' : 'Fill the box with the flashing code';
+  }
+  function camTip(now) {
+    const n = liveTracks(now).length, two = !!rx && rx.lanes === 2;
+    if (n) return two && n < 2 ? 'Locked on 1 of 2 codes' : 'Locked on';
+    return two ? 'Fit both codes in view (turn the phone sideways)' : 'Point at the flashing code';
   }
 
   $('#flip-cam').onclick = () => {
@@ -1170,7 +1362,7 @@
     openRxCamera({ deviceId: list[(i + 1) % list.length].deviceId });
   };
 
-  function handleText(text) {
+  function handleText(text, quad, ver) {
     if (!rx || !rx.running) return;
     const f = Beam.parseText(text);
     if (!f) {
@@ -1182,9 +1374,9 @@
       return;
     }
     rx.lastHit = performance.now();
-    cam.classList.add('hit');
+    trackHit(quad, ver);
     rx.listening = f.listening;
-    if (f.lanes !== rx.lanes) { rx.lanes = f.lanes; layoutGuide(); }
+    rx.lanes = f.lanes;
     if (!rx.decoder || !rx.decoder.matches(f)) {
       if (rx.decoder) setHint('The sender started a new transfer, so this one started over.', 'warn');
       rx.decoder = new Beam.Decoder(f);
@@ -1201,7 +1393,7 @@
   function renderRecvStats() {
     if (!rx || !rx.running) return;
     const now = performance.now();
-    if (now - rx.lastHit > 400) cam.classList.remove('hit');
+    $('#cam-tip').textContent = camTip(now);
     const d = rx.decoder;
     if (d) {
       rx.recent = rx.recent.filter((r) => now - r.t < 3000);
@@ -1227,7 +1419,7 @@
       }
       if (caught != null) parts.push(`<span>catching ${Math.round(caught * 100)}% of codes</span>`);
       $('#recv-stats').innerHTML = parts.join('');
-      if (now - rx.lastHit > 1500) setHint('Lost the code. Point at the screen and fill the box.', 'warn');
+      if (now - rx.lastHit > 1500) setHint('Lost the code. Point the camera at the other screen.', 'warn');
       else if (caught != null && caught < 0.5) setHint('Missing many codes. Hold steady, move closer, or slow the sender down.', 'warn');
       else if (caught != null && caught > 0.95 && win.length > 12 && !rx.listening) setHint('Catching almost every code. The sender can go faster.', 'good');
       else if (caught != null) setHint('');
@@ -1272,6 +1464,8 @@
   function stopReceiving() {
     if (!rx) return;
     rx.running = false;
+    cancelAnimationFrame(overlayRaf);
+    overlayRaf = 0;
     rxCam.stop();
     clearInterval(statsTimer);
     keepAwake(false);

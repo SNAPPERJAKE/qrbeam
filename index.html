@@ -165,9 +165,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cam.mirror video { transform: scaleX(-1); }
-.guide { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 2px solid rgba(255,255,255,0.85); border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0,0,0,0.28); transition: border-color 0.15s; }
-.guide.hit, .cam.hit .guide { border-color: var(--accent); }
-.guide.lane { box-shadow: none; }
+.cam .overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .cam .tip { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px; color: #fff; font-size: 0.9rem; text-align: center; background: linear-gradient(transparent, rgba(0,0,0,0.6)); }
 .meter { height: 12px; border-radius: 999px; background: var(--line); overflow: hidden; }
 .meter i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.2s; }
@@ -238,9 +236,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .status { margin: 0; display: grid; justify-items: center; gap: 8px; padding: 14px; border-radius: var(--radius); background: #ffffff; border: 1px solid var(--line); }
 .status canvas { display: block; image-rendering: pixelated; }
 .status figcaption { font-size: 0.85rem; color: #4a5663; text-align: center; max-width: 34ch; }
-.guide.lane { display: none; }
-.cam.lanes2 .guide.lane { display: block; }
-.cam.lanes2 .guide.one { display: none; }
 @media (min-width: 760px) {
   #view-receiving.twoway { max-width: 1000px; }
   #view-receiving.twoway .rx-top { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: center; }
@@ -299,7 +294,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <ol class="steps">
       <li>Open QR Beam on both devices.</li>
       <li>Tap Send on one and choose what to send.</li>
-      <li>Tap Receive on the other and fill the box with the flashing code. Missed frames don't matter; it keeps going until it has everything.</li>
+      <li>Tap Receive on the other and point its camera at the flashing code. It locks on by itself, and missed frames don't matter: it keeps going until it has everything.</li>
     </ol>
     <p class="small" id="install-tip" hidden>On iPhone: tap Share, then <b>Add to Home Screen</b>. After that QR Beam opens and works in airplane mode.</p>
     <section class="settings" aria-labelledby="settings-title">
@@ -419,10 +414,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <div class="rx-top">
       <div class="cam" id="cam">
         <video id="video" playsinline muted autoplay></video>
-        <div class="guide one" id="guide"></div>
-        <div class="guide lane" id="guide-l"></div>
-        <div class="guide lane" id="guide-r"></div>
-        <div class="tip" id="cam-tip">Fill the box with the flashing code</div>
+        <canvas class="overlay" id="overlay" aria-hidden="true"></canvas>
+        <div class="tip" id="cam-tip">Point at the flashing code</div>
       </div>
       <figure class="status" id="status" hidden>
         <canvas id="status-qr" width="1" height="1" aria-label="Status code for the sender"></canvas>

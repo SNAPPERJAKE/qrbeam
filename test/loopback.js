@@ -15,7 +15,7 @@ export function realTiming() {
 window.runLoop = async function ({
   size = 40000, density = 'normal', fps = 12, loss = 0.2, angle = 3, qrPx = 560, blur = 0.6,
   kind = 'random', extraText = null, name = 'test.bin', type = 'application/octet-stream', bytes = null,
-  lanes = 1, gap = 60,
+  lanes = 1, gap = 60, camW = 1280, camH = 720, dx = 0, dy = 0,
 } = {}) {
   const data = bytes || new Uint8Array(size);
   if (bytes) { /* caller's own file */ } else if (kind === 'random') {
@@ -30,9 +30,13 @@ window.runLoop = async function ({
   const B = Beam.blockSizeFor(density, payload.length);
   const enc = new Beam.Encoder(payload, B, crypto.getRandomValues(new Uint32Array(1))[0]);
 
-  const cam = document.createElement('canvas'); cam.width = 1280; cam.height = 720;
+  const cam = document.createElement('canvas'); cam.width = camW; cam.height = camH;
   const c = cam.getContext('2d');
   const tiny = document.createElement('canvas'); const tc = tiny.getContext('2d');
+  // Codes are painted crisp at a whole number of pixels per module, then
+  // placed with smoothing on, so tilted edges come out soft the way a lens
+  // renders them rather than as hard pixel staircases.
+  const crisp = document.createElement('canvas'); const cc = crisp.getContext('2d');
   let seed = 0, version = 0;
   const flags = lanes === 2 ? Beam.FLAG_LANES : 0;
   const paintCode = (s) => {
@@ -46,18 +50,22 @@ window.runLoop = async function ({
       }
     }
     tc.putImageData(img, 0, 0);
+    const px = Math.max(1, Math.ceil(qrPx / N));
+    crisp.width = crisp.height = N * px;
+    cc.imageSmoothingEnabled = false;
+    cc.drawImage(tiny, 0, 0, N * px, N * px);
   };
   const draw = () => {
     const first = seed + 1;
     seed += lanes;
     if (Math.random() < loss) return; // the camera misses this frame entirely
-    c.filter = 'none'; c.fillStyle = '#556'; c.fillRect(0, 0, 1280, 720);
-    c.save(); c.translate(640, 360); c.rotate((angle * Math.PI) / 180);
-    c.filter = `blur(${blur}px) brightness(0.85) contrast(0.9)`; c.imageSmoothingEnabled = false;
+    c.filter = 'none'; c.fillStyle = '#556'; c.fillRect(0, 0, camW, camH);
+    c.save(); c.translate(camW / 2 + dx, camH / 2 + dy); c.rotate((angle * Math.PI) / 180);
+    c.filter = `blur(${blur}px) brightness(0.85) contrast(0.9)`; c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
     for (let i = 0; i < lanes; i++) {
       paintCode(first + i);
       const x = lanes === 2 ? (i ? gap / 2 : -gap / 2 - qrPx) : -qrPx / 2;
-      c.drawImage(tiny, x, -qrPx / 2, qrPx, qrPx);
+      c.drawImage(crisp, x, -qrPx / 2, qrPx, qrPx);
     }
     c.restore();
   };
