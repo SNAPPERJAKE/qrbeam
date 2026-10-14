@@ -35,6 +35,9 @@
     view = name;
     window.scrollTo(0, 0);
     if (name === 'home') heroStart(); else heroStop();
+    // the badge stays out of the way of the codes and the camera
+    $('#credit').hidden = name === 'sending' || name === 'receiving';
+    $('#credit-pop').hidden = true;
   }
 
   // Theme colours, read back from the CSS tokens for canvas drawing.
@@ -513,6 +516,47 @@
     if (e.name === 'NotFoundError' || e.name === 'OverconstrainedError') return 'No suitable camera found on this device.';
     return 'The camera would not start (' + e.name + '). Close other apps that use it, then tap Try again.';
   }
+  const FRONT = /front|user|face|selfie/i, BACK = /back|rear|environment|world/i;
+  function facingOf(stream) {
+    const t = stream.getVideoTracks()[0];
+    const st = t && t.getSettings ? t.getSettings() : {};
+    return st.facingMode || '';
+  }
+  // Phones treat a plain facingMode as a hint, and iPhone Safari will hand back
+  // the camera it just had when you switch. So ask for the direction outright,
+  // then by the camera's name ("Front Camera"), and only then as a hint, which
+  // is what laptop webcams that don't report a direction need.
+  async function openStream(get, deviceId, facing) {
+    if (deviceId) return get({ deviceId: { exact: deviceId } });
+    let stream = null, firstErr = null;
+    try {
+      stream = await get({ facingMode: { exact: facing } });
+    } catch (e) {
+      if (e.name === 'NotAllowedError') throw e;
+      firstErr = e;
+    }
+    if (stream && (facingOf(stream) || facing) === facing) return stream;
+    let named = [];
+    try {
+      const want = facing === 'user' ? FRONT : BACK;
+      named = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput' && want.test(d.label));
+    } catch (e) { /* no list */ }
+    if (named.length) {
+      // the plain wide camera, rather than an ultra-wide or telephoto one
+      const pick = named.find((d) => !/ultra|tele|dual|triple/i.test(d.label)) || named[0];
+      if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+      try { return await get({ deviceId: { exact: pick.deviceId } }); } catch (e) {
+        if (e.name === 'NotAllowedError') throw e;
+      }
+    }
+    if (stream) return stream;
+    try {
+      return await get({ facingMode: facing });
+    } catch (e) {
+      throw firstErr && e.name === 'OverconstrainedError' ? firstErr : e;
+    }
+  }
+
   // Runs one camera into a <video> and keeps the QR scanner fed with crops of
   // its frames. The receiver reads the data stream with one; in two-way mode
   // the sender reads the receiver's status code with another.
@@ -538,12 +582,11 @@
           : 'The camera only works when QR Beam is opened from its https:// link (or as a file on a computer).';
       }
       if (opts.facing) cam.facing = opts.facing;
-      const v = opts.deviceId ? { deviceId: { exact: opts.deviceId } } : { facingMode: { ideal: cam.facing } };
-      v.width = { ideal: opts.width || 1920 };
-      v.height = { ideal: opts.height || 1080 };
+      const size = { width: { ideal: opts.width || 1920 }, height: { ideal: opts.height || 1080 } };
+      const get = (v) => navigator.mediaDevices.getUserMedia({ video: Object.assign(v, size), audio: false });
       let stream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+        stream = await openStream(get, opts.deviceId, cam.facing);
       } catch (e) {
         return gen === cam.gen ? cameraMessage(e) : 'stopped';
       }
@@ -1350,6 +1393,34 @@
       : `${fmtBytes(total)} in ${fmtTime(secs)} (${(d.len / 1024 / secs).toFixed(1)} KB/s)`;
     $('#ios-save-tip').hidden = !(isIOS && item.files);
   }
+
+  // ===================== "Made by" badge =====================
+  const CREDIT_URL = 'https://www.youtube.com/watch?v=DLzxrzFCyOs&list=RDDLzxrzFCyOs&start_radio=1&pp=ygULcmljayBhc3RsZXmgBwHSBwkJPwwBhyohjO8%3D';
+  const creditPop = $('#credit-pop'), creditBtn = $('#credit-btn');
+  $('#credit-link').href = CREDIT_URL;
+  function setCredit(open) {
+    creditPop.hidden = !open;
+    creditBtn.setAttribute('aria-expanded', String(open));
+    if (!open || creditPop.dataset.drawn) return;
+    const qr = qrcode(0, 'M');
+    qr.addData(CREDIT_URL);
+    qr.make();
+    const tiny = document.createElement('canvas');
+    const n = qrBitmap(qr, tiny, 3), N = n + 6;
+    const dpr = window.devicePixelRatio || 1;
+    const px = N * Math.max(1, Math.floor((180 * dpr) / N));
+    const cv = $('#credit-qr');
+    cv.width = cv.height = px;
+    cv.style.width = cv.style.height = px / dpr + 'px';
+    const c = cv.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.drawImage(tiny, 0, 0, px, px);
+    creditPop.dataset.drawn = '1';
+  }
+  creditBtn.onclick = () => setCredit(creditPop.hidden);
+  $('#credit-x').onclick = () => setCredit(false);
+  document.addEventListener('click', (e) => { if (!creditPop.hidden && !$('#credit').contains(e.target)) setCredit(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !creditPop.hidden) setCredit(false); });
 
   // ===================== navigation =====================
   function goHome() {
