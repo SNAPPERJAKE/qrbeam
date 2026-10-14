@@ -38,6 +38,9 @@
     // the badge stays out of the way of the codes and the camera
     $('#credit').hidden = name === 'sending' || name === 'receiving';
     $('#credit-pop').hidden = true;
+    $('#home-bar').hidden = name !== 'home';
+    $('#look-pop').hidden = true;
+    $('#look-btn').setAttribute('aria-expanded', 'false');
   }
 
   // Theme colours, read back from the CSS tokens for canvas drawing.
@@ -128,6 +131,22 @@
     }
     ctx.putImageData(img, 0, 0);
     return n;
+  }
+  // A still code for a person to scan, about cssSize px across and crisp at
+  // any pixel ratio.
+  function paintQR(canvas, text, cssSize, quiet) {
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    const tiny = document.createElement('canvas');
+    const N = qrBitmap(qr, tiny, quiet) + 2 * quiet;
+    const dpr = window.devicePixelRatio || 1;
+    const px = N * Math.max(1, Math.floor((cssSize * dpr) / N));
+    canvas.width = canvas.height = px;
+    canvas.style.width = canvas.style.height = px / dpr + 'px';
+    const c = canvas.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.drawImage(tiny, 0, 0, px, px);
   }
 
   // ===================== home: the beam animation =====================
@@ -1593,25 +1612,35 @@
     creditPop.hidden = !open;
     creditBtn.setAttribute('aria-expanded', String(open));
     if (!open || creditPop.dataset.drawn) return;
-    const qr = qrcode(0, 'M');
-    qr.addData(CREDIT_URL);
-    qr.make();
-    const tiny = document.createElement('canvas');
-    const n = qrBitmap(qr, tiny, 3), N = n + 6;
-    const dpr = window.devicePixelRatio || 1;
-    const px = N * Math.max(1, Math.floor((180 * dpr) / N));
-    const cv = $('#credit-qr');
-    cv.width = cv.height = px;
-    cv.style.width = cv.style.height = px / dpr + 'px';
-    const c = cv.getContext('2d');
-    c.imageSmoothingEnabled = false;
-    c.drawImage(tiny, 0, 0, px, px);
+    paintQR($('#credit-qr'), CREDIT_URL, 180, 3);
     creditPop.dataset.drawn = '1';
   }
   creditBtn.onclick = () => setCredit(creditPop.hidden);
   $('#credit-x').onclick = () => setCredit(false);
   document.addEventListener('click', (e) => { if (!creditPop.hidden && !$('#credit').contains(e.target)) setCredit(false); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !creditPop.hidden) setCredit(false); });
+
+  // ===================== home: "?" help and look and sound =====================
+  const help = $('#help'), lookPop = $('#look-pop'), lookBtn = $('#look-btn');
+  $('#help-btn').onclick = () => {
+    setLook(false);
+    // a big code on a computer, a smaller one on a phone (where it's for a second phone)
+    paintQR($('#help-qr'), HOME_URL, window.innerWidth >= 700 ? 230 : 180, 4);
+    if (help.showModal) help.showModal(); else help.setAttribute('open', '');
+  };
+  function closeHelp() { if (help.close) help.close(); else help.removeAttribute('open'); }
+  $('#help-x').onclick = closeHelp;
+  // the card fills the dialog, so a click that lands on the dialog itself is on the backdrop
+  help.addEventListener('click', (e) => { if (e.target === help) closeHelp(); });
+
+  function setLook(open) {
+    lookPop.hidden = !open;
+    lookBtn.setAttribute('aria-expanded', String(open));
+  }
+  lookBtn.onclick = () => setLook(lookPop.hidden);
+  $('#look-x').onclick = () => setLook(false);
+  document.addEventListener('click', (e) => { if (!lookPop.hidden && !$('#home-bar').contains(e.target)) setLook(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !lookPop.hidden) setLook(false); });
 
   // ===================== navigation =====================
   function goHome() {
@@ -1628,7 +1657,6 @@
   $('#got-home').onclick = goHome;
   $('#got-again').onclick = () => startReceiving();
 
-  $('#install-tip').hidden = !(isIOS && !navigator.standalone && location.protocol === 'https:');
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

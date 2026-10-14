@@ -17,7 +17,8 @@ On the receiver, a grid shows one square per piece of the file, lit as each piec
 it chimes (and buzzes, where the phone allows) when the file is complete. The home screen's
 animated code is the link to the site itself: it keeps changing pattern, but any phone camera
 pointed at it opens QR Beam.
-Color, light/dark theme and the chime are under **Look and sound** on the home screen.
+On the home screen, the **?** button (bottom left) opens a short how-to next to a big code that
+opens QR Beam on a phone, and the palette button (bottom right) has color, light/dark theme and the chime.
 
 **Lock-on:** the receiver no longer needs the code centred or filling a box. It searches the whole
 camera view, and once it reads a code it scans only a tight box around it at full resolution
