@@ -18,6 +18,20 @@ it chimes (and buzzes, where the phone allows) when the file is complete. The ho
 animated code is a real QR Beam stream: point another device's Receive at it for a test message.
 Color, light/dark theme and the chime are under **Look and sound** on the home screen.
 
+**Photos** are shrunk before sending (Large = 2048 px, Small = 1280 px, or Original): a 3 MB phone
+photo becomes a few hundred KB, which is the difference between minutes and seconds.
+
+**Two codes at once:** on a wide screen the sender shows two codes side by side and the receiver
+reads both every frame (about 1.75x faster in testing). Toggle with the 1 code / 2 codes button.
+
+**Two-way:** with the screens facing each other, each device uses its front camera. The receiver
+shows a small status code; the sender reads it to show the receiver's progress, speeds itself up
+or down from the receiver's catch rate, and stops with "Delivered" once everything has arrived.
+- PC sends to iPhone: on the iPhone tap Receive, then **Use front camera (two-way)**, and hold the
+  phone with its screen toward the monitor.
+- iPhone sends to PC: Send with Two-way on and hold the phone's screen toward the webcam. The PC's
+  receive screen shows its status code automatically.
+
 Tips
 - Laptop webcam reading a phone screen: use **Easy** density and turn the phone brightness up.
 - Phone camera reading a monitor: **Dense** or **Max**, and raise the speed until the receiver
@@ -55,6 +69,8 @@ Browsers only allow camera access on `https://` pages (or local files on a compu
 
 ## Tests
 
+- `test/duo.html`: two copies of the app side by side, each one's camera fed by the other's
+  screen, for the full two-way loop: `await duo.run({ size: 60000, lanes: 2 })`.
 - `node test/core.test.js`: base45/CRC/packing, exact recovery under 40% loss, and a table
   of frames needed per block count.
 - `test/loopback.js`: in-browser end-to-end run. Serve the folder over http, open the page,

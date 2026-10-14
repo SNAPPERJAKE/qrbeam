@@ -2,13 +2,19 @@
 // No DOM in here, so the same file runs in the page and under Node for tests.
 //
 // Frame (before base45):
-//   0      u8   protocol version (1)
-//   1..4   u32  transfer id (random per send; a new id resets the receiver)
-//   5..8   u32  payload length in bytes
-//   9..10  u16  block size B (multiple of 4)
-//   11..14 u32  seed (symbol id; sender counts up from 0 and loops forever)
-//   15..18 u32  CRC32 of the whole payload
-//   19..   B bytes: XOR of the source blocks this seed picks (LT fountain code)
+//   0      u8   protocol version (3)
+//   1      u8   flags: bit0 = two codes on screen, bit1 = sender reads status
+//   2..5   u32  transfer id (random per send; a new id resets the receiver)
+//   6..9   u32  payload length in bytes
+//   10..11 u16  block size B (multiple of 4)
+//   12..15 u32  seed (symbol id; sender counts up from 0 and loops forever)
+//   16..19 u32  CRC32 of the whole payload
+//   20..   B bytes: XOR of the source blocks this seed picks (LT fountain code)
+//
+// Status (receiver -> sender, two-way mode), 17 bytes:
+//   0 u8 0x81 · 1 u8 flags (bit0 done, bit1 has a transfer) · 2..5 u32 transfer id
+//   6..9 u32 blocks recovered · 10..13 u32 K · 14 u8 % of frames caught (255 = unknown)
+//   15..16 u16 frames/s caught x10
 //
 // The payload is cut into K = ceil(len/B) blocks. Even seeds carry one block
 // as-is (walking through them in order), odd seeds carry a random mix chosen by
@@ -17,8 +23,10 @@
 (function (root) {
   'use strict';
 
-  const VERSION = 2;
-  const HEADER = 19;
+  const VERSION = 3;
+  const HEADER = 20;
+  const STATUS = 0x81, STATUS_LEN = 17;
+  const FLAG_LANES = 1, FLAG_LISTEN = 2;
   const DENSE_K = 100;
   // Mixed frames are drawn as if from K/SPREAD blocks, then spread over SPREAD
   // times as many. About half the blocks arrive plain, so a mix only has to be
@@ -180,15 +188,16 @@
       this.src32 = new Uint32Array(this.src.buffer);
       this.W = blockSize / 4;
     }
-    frame(seed) {
+    frame(seed, flags = 0) {
       const out = new Uint8Array(HEADER + this.B);
       const dv = new DataView(out.buffer);
       dv.setUint8(0, VERSION);
-      dv.setUint32(1, this.tid);
-      dv.setUint32(5, this.len);
-      dv.setUint16(9, this.B);
-      dv.setUint32(11, seed >>> 0);
-      dv.setUint32(15, this.crc);
+      dv.setUint8(1, flags);
+      dv.setUint32(2, this.tid);
+      dv.setUint32(6, this.len);
+      dv.setUint16(10, this.B);
+      dv.setUint32(12, seed >>> 0);
+      dv.setUint32(16, this.crc);
       const acc = new Uint32Array(this.W);
       for (const i of symbolIndices(seed >>> 0, this.K, this.tid)) {
         xorInto(acc, this.src32.subarray(i * this.W, (i + 1) * this.W));
@@ -196,18 +205,20 @@
       out.set(new Uint8Array(acc.buffer), HEADER);
       return out;
     }
-    frameText(seed) { return b45encode(this.frame(seed)); }
+    frameText(seed, flags = 0) { return b45encode(this.frame(seed, flags)); }
   }
 
   function parseFrame(bytes) {
     if (!bytes || bytes.length < HEADER + 4) return null;
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     if (dv.getUint8(0) !== VERSION) return null;
-    const B = dv.getUint16(9);
+    const B = dv.getUint16(10);
     if (B % 4 || bytes.length !== HEADER + B) return null;
+    const flags = dv.getUint8(1);
     return {
-      tid: dv.getUint32(1), len: dv.getUint32(5), B,
-      seed: dv.getUint32(11), crc: dv.getUint32(15),
+      tid: dv.getUint32(2), len: dv.getUint32(6), B,
+      seed: dv.getUint32(12), crc: dv.getUint32(16),
+      lanes: flags & FLAG_LANES ? 2 : 1, listening: !!(flags & FLAG_LISTEN),
       data: bytes.subarray(HEADER),
     };
   }
@@ -220,7 +231,31 @@
   // Protocol version of a frame that failed to parse, if it looks like one of ours.
   function peekVersion(text) {
     const b = typeof text === 'string' && text.length >= 30 ? b45decode(text) : null;
-    return b && b.length >= HEADER + 4 && b[0] >= 1 && b[0] <= 15 ? b[0] : null;
+    return b && b.length >= 23 && b[0] >= 1 && b[0] <= 15 ? b[0] : null;
+  }
+
+  // ---------- two-way status (receiver -> sender) ----------
+  function statusText(st) {
+    const out = new Uint8Array(STATUS_LEN);
+    const dv = new DataView(out.buffer);
+    out[0] = STATUS;
+    out[1] = (st.done ? 1 : 0) | (st.tid ? 2 : 0);
+    dv.setUint32(2, st.tid >>> 0);
+    dv.setUint32(6, st.known >>> 0);
+    dv.setUint32(10, st.K >>> 0);
+    out[14] = st.caught == null ? 255 : Math.max(0, Math.min(100, Math.round(st.caught * 100)));
+    dv.setUint16(15, Math.max(0, Math.min(65535, Math.round((st.rate || 0) * 10))));
+    return b45encode(out);
+  }
+  function parseStatus(text) {
+    const b = typeof text === 'string' && text.length === b45len(STATUS_LEN) ? b45decode(text) : null;
+    if (!b || b[0] !== STATUS) return null;
+    const dv = new DataView(b.buffer);
+    return {
+      done: !!(b[1] & 1), tid: b[1] & 2 ? dv.getUint32(2) : 0,
+      known: dv.getUint32(6), K: dv.getUint32(10),
+      caught: b[14] === 255 ? null : b[14] / 100, rate: dv.getUint16(15) / 10,
+    };
   }
 
   class Decoder {
@@ -461,7 +496,8 @@
     VERSION, HEADER, DENSITY,
     b45encode, b45decode, b45len, crc32,
     solitonCdf, symbolIndices,
-    Encoder, Decoder, parseFrame, parseText, peekVersion,
+    FLAG_LANES, FLAG_LISTEN,
+    Encoder, Decoder, parseFrame, parseText, peekVersion, statusText, parseStatus,
     pack, unpack, packBody, unpackBody, blockSizeFor,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;

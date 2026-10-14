@@ -80,6 +80,10 @@ function transfer(payload, B, { loss = 0, startSeed = 0, ge = true, dupes = 0 } 
     const f = Beam.parseText(enc.frameText(42));
     assert.strictEqual(f.tid, 0xdeadbeef); assert.strictEqual(f.seed, 42);
     assert.strictEqual(f.len, 1000); assert.strictEqual(f.B, 336);
+    assert.strictEqual(f.lanes, 1); assert.strictEqual(f.listening, false);
+    const g = Beam.parseText(enc.frameText(43, Beam.FLAG_LANES | Beam.FLAG_LISTEN));
+    assert.strictEqual(g.lanes, 2); assert.strictEqual(g.listening, true);
+    assert.deepStrictEqual(Buffer.from(g.data), Buffer.from(Beam.parseText(enc.frameText(43)).data));
     assert.strictEqual(Beam.parseText('HELLO WORLD'), null);
     assert.strictEqual(Beam.parseText('https://example.com'), null);
   });
@@ -147,6 +151,19 @@ function transfer(payload, B, { loss = 0, startSeed = 0, ge = true, dupes = 0 } 
     assert.strictEqual(Beam.parseText(text), null);
     assert.strictEqual(Beam.peekVersion(text), 1);
     assert.strictEqual(Beam.peekVersion('HTTPS://EXAMPLE.COM'), null);
+  });
+
+  await test('two-way status round-trips and is never mistaken for data', () => {
+    const st = { done: false, tid: 0xabcdef01, known: 1234, K: 5000, caught: 0.87, rate: 14.3 };
+    const t = Beam.statusText(st);
+    assert.ok(/^[0-9A-Z $%*+\-./:]+$/.test(t) && t.length <= 47, 'fits a version-2 QR');
+    assert.deepStrictEqual(Beam.parseStatus(t), st);
+    assert.strictEqual(Beam.parseText(t), null);
+    assert.strictEqual(Beam.peekVersion(t), null);
+    const w = Beam.parseStatus(Beam.statusText({ tid: 0, known: 0, K: 0, caught: null }));
+    assert.deepStrictEqual(w, { done: false, tid: 0, known: 0, K: 0, caught: null, rate: 0 });
+    assert.strictEqual(Beam.parseStatus(new Beam.Encoder(new Uint8Array(9), 16, 1).frameText(0)), null);
+    assert.strictEqual(Beam.parseStatus(Beam.statusText({ ...st, done: true })).done, true);
   });
 
   // How many unique frames a receive needs, as a multiple of K, and how much of

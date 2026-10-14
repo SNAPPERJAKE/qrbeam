@@ -166,7 +166,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .cam video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cam.mirror video { transform: scaleX(-1); }
 .guide { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 2px solid rgba(255,255,255,0.85); border-radius: 10px; box-shadow: 0 0 0 100vmax rgba(0,0,0,0.28); transition: border-color 0.15s; }
-.guide.hit { border-color: var(--accent); }
+.guide.hit, .cam.hit .guide { border-color: var(--accent); }
+.guide.lane { box-shadow: none; }
 .cam .tip { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px; color: #fff; font-size: 0.9rem; text-align: center; background: linear-gradient(transparent, rgba(0,0,0,0.6)); }
 .meter { height: 12px; border-radius: 999px; background: var(--line); overflow: hidden; }
 .meter i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.2s; }
@@ -208,6 +209,46 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .switch input:focus-visible + i { outline: 3px solid var(--accent); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .haptic { position: fixed; left: -100px; top: 0; opacity: 0; pointer-events: none; }
+
+/* send setup extras */
+.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+.toggle-row label { display: grid; gap: 2px; cursor: pointer; }
+.toggle-row label b { font-size: 0.98rem; }
+.files .size .to { color: var(--accent); font-weight: 600; }
+
+/* sender: two-way link panel and the delivered screen */
+.link { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.link video { width: 72px; height: 54px; object-fit: cover; border-radius: 8px; background: #000; flex: none; transform: scaleX(-1); }
+.link-body { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.link-line { font-size: 0.9rem; }
+.link-line b { color: var(--accent); }
+.meter.thin { height: 6px; }
+.speed .val { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 10px; cursor: pointer; }
+.speed .val.auto { border-color: var(--accent); color: var(--accent); }
+.delivered { display: grid; justify-items: center; gap: 12px; text-align: center; padding: 24px 16px; color: #111a24; }
+.delivered svg { width: 88px; height: 88px; }
+.delivered h2 { font-size: 1.6rem; }
+.delivered p { color: #4a5663; }
+.delivered .btn { background: #ffffff; color: #111a24; border-color: #d3dae2; }
+.delivered .btn.primary { background: var(--accent-l); border-color: var(--accent-l); color: #ffffff; }
+#view-sending.done #qr, #view-sending.done .hud { display: none; }
+
+/* receiver: status code for two-way mode */
+.rx-top { display: grid; gap: 14px; }
+.status { margin: 0; display: grid; justify-items: center; gap: 8px; padding: 14px; border-radius: var(--radius); background: #ffffff; border: 1px solid var(--line); }
+.status canvas { display: block; image-rendering: pixelated; }
+.status figcaption { font-size: 0.85rem; color: #4a5663; text-align: center; max-width: 34ch; }
+.guide.lane { display: none; }
+.cam.lanes2 .guide.lane { display: block; }
+.cam.lanes2 .guide.one { display: none; }
+@media (min-width: 760px) {
+  #view-receiving.twoway { max-width: 1000px; }
+  #view-receiving.twoway .rx-top { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: center; }
+}
+@media (max-width: 759px) {
+  #view-receiving.twoway .status { order: -1; }
+  #view-receiving.twoway .cam { max-width: min(100%, calc(30vh * var(--arn, 1.333))); }
+}
 
 @media (max-width: 420px) {
   .choice { min-height: 132px; padding: 14px; }
@@ -286,6 +327,15 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       <input id="file-input" type="file" multiple hidden>
     </div>
     <ul class="files" id="file-list"></ul>
+    <fieldset id="photo-opts" hidden>
+      <legend>Photos</legend>
+      <div class="seg three">
+        <input type="radio" name="photo" id="p-original" value="original"><label for="p-original"><b>Original</b><span>full size</span></label>
+        <input type="radio" name="photo" id="p-large" value="large"><label for="p-large"><b>Large</b><span>2048 px</span></label>
+        <input type="radio" name="photo" id="p-small" value="small"><label for="p-small"><b>Small</b><span>1280 px</span></label>
+      </div>
+      <p class="small">Smaller photos send many times faster and still look sharp on a screen.</p>
+    </fieldset>
     <label class="field" for="send-text">Or type or paste text
       <textarea id="send-text" placeholder="A link, a note, a password you don't want to email yourself..."></textarea>
     </label>
@@ -302,8 +352,12 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <fieldset>
       <legend>Speed: <span class="mono" id="fps-label">10 frames/s</span></legend>
       <input type="range" id="fps" min="0" max="8" step="1" aria-describedby="fps-help">
-      <p class="small" id="fps-help">Start around 10. The receiver tells you if you can go faster.</p>
+      <p class="small" id="fps-help">Where to start. With Two-way on, the sender then speeds up or slows down by itself.</p>
     </fieldset>
+    <div class="toggle-row">
+      <label for="two-way"><b>Two-way</b><span class="small">Face the screens toward each other. The receiver answers through this device's front camera, so the speed tunes itself and the sender stops once everything has arrived.</span></label>
+      <span class="switch"><input type="checkbox" id="two-way"><i></i></span>
+    </div>
     <div class="estimate" id="estimate">Nothing selected yet.</div>
     <div class="row end">
       <button class="btn" id="send-back" type="button">Back</button>
@@ -313,16 +367,35 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
   <!-- SENDING -->
   <section id="view-sending" class="stage" hidden>
-    <div class="qr-wrap white" id="qr-wrap"><canvas id="qr" width="1" height="1" aria-label="Animated QR code stream"></canvas></div>
+    <div class="qr-wrap white" id="qr-wrap">
+      <canvas id="qr" width="1" height="1" aria-label="Animated QR code stream"></canvas>
+      <div class="delivered" id="delivered" hidden>
+        <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="var(--good)"/><path d="M14 24.5l7 7 13-14" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <h2>Delivered</h2>
+        <p id="delivered-sum"></p>
+        <div class="row">
+          <button class="btn" id="sent-home" type="button">Done</button>
+          <button class="btn primary" id="sent-more" type="button">Send something else</button>
+        </div>
+      </div>
+    </div>
     <div class="hud">
+      <div class="link" id="link" hidden>
+        <video id="tx-video" playsinline muted autoplay></video>
+        <div class="link-body">
+          <div class="link-line" id="link-line">Starting the camera…</div>
+          <div class="meter thin" id="tx-meter"><i></i></div>
+        </div>
+      </div>
       <div class="stats" id="send-stats"></div>
       <div class="row">
         <div class="speed">
           <button class="btn round" id="slower" type="button" aria-label="Slower">−</button>
-          <span class="val" id="speed-val">10/s</span>
+          <button class="val" id="speed-val" type="button" title="Tap to switch automatic speed on or off">10/s</button>
           <button class="btn round" id="faster" type="button" aria-label="Faster">+</button>
         </div>
         <span class="grow"></span>
+        <button class="btn small-btn" id="lanes" type="button">1 code</button>
         <button class="btn small-btn" id="pause" type="button">Pause</button>
         <button class="btn small-btn" id="fullscreen" type="button">Full screen</button>
         <button class="btn small-btn" id="send-stop" type="button">Stop</button>
@@ -332,10 +405,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
   <!-- RECEIVING -->
   <main id="view-receiving" class="col" hidden>
-    <div class="cam" id="cam">
-      <video id="video" playsinline muted autoplay></video>
-      <div class="guide" id="guide"></div>
-      <div class="tip" id="cam-tip">Fill the box with the flashing code</div>
+    <div class="rx-top">
+      <div class="cam" id="cam">
+        <video id="video" playsinline muted autoplay></video>
+        <div class="guide one" id="guide"></div>
+        <div class="guide lane" id="guide-l"></div>
+        <div class="guide lane" id="guide-r"></div>
+        <div class="tip" id="cam-tip">Fill the box with the flashing code</div>
+      </div>
+      <figure class="status" id="status" hidden>
+        <canvas id="status-qr" width="1" height="1" aria-label="Status code for the sender"></canvas>
+        <figcaption id="status-cap">Two-way: the sender reads this code to follow your progress and tune its speed.</figcaption>
+      </figure>
     </div>
     <div class="alert" id="cam-error" hidden></div>
     <canvas class="grid" id="grid" aria-hidden="true"></canvas>
@@ -343,6 +424,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <div class="stats" id="recv-stats"><span>waiting for the first frame</span></div>
     <p class="hint" id="recv-hint"></p>
     <div class="row end">
+      <button class="btn small-btn" id="flip-cam" type="button" hidden>Use front camera (two-way)</button>
       <button class="btn small-btn" id="switch-cam" type="button" hidden>Switch camera</button>
       <button class="btn small-btn" id="recv-retry" type="button" hidden>Try again</button>
       <button class="btn small-btn" id="recv-stop" type="button">Stop</button>

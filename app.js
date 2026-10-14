@@ -21,6 +21,10 @@
   if (!['ember', 'signal', 'mint', 'violet', 'rose'].includes(prefs.accent)) prefs.accent = 'ember';
   if (!['auto', 'light', 'dark'].includes(prefs.theme)) prefs.theme = 'auto';
   if (typeof prefs.sound !== 'boolean') prefs.sound = true;
+  if (!['original', 'large', 'small'].includes(prefs.photoSize)) prefs.photoSize = 'large';
+  if (typeof prefs.twoWay !== 'boolean') prefs.twoWay = true;
+  if (![1, 2, 'auto'].includes(prefs.lanes)) prefs.lanes = 'auto';
+  if (!['environment', 'user'].includes(prefs.rxFacing)) prefs.rxFacing = 'environment';
   function savePrefs() {
     try { localStorage.setItem('qrbeam', JSON.stringify(prefs)); } catch (e) { /* private mode */ }
   }
@@ -404,8 +408,8 @@
     if (s < 3600) return Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
     return Math.floor(s / 3600) + 'h ' + String(Math.floor(s / 60) % 60).padStart(2, '0') + 'm';
   }
-  // Frames a receiver needs, from the decoder tests (about 6-8% over the block count).
-  function framesNeeded(K) { return K === 1 ? 1 : Math.ceil(K * (K > 100 ? 1.08 : 1.06)) + 1; }
+  // Frames a receiver needs, from the decoder tests (about 3-7% over the block count).
+  function framesNeeded(K) { return K === 1 ? 1 : Math.ceil(K * 1.06) + 1; }
 
   // Keep the screen on while beaming or scanning.
   let wakeLock = null, wantWake = false;
@@ -423,301 +427,16 @@
     if (wantWake) keepAwake(true);
     heroStart();
     // iOS ends the camera when the app goes to the background.
-    if (rx && rx.running && rx.stream && rx.stream.getVideoTracks().every((t) => t.readyState === 'ended')) openCamera();
+    if (rxCam.running && rxCam.ended()) rxCam.reopen();
+    if (txCam.running && txCam.ended()) txCam.reopen();
   });
 
-  // ===================== send: choosing =====================
-  const files = [];
-  const fileInput = $('#file-input'), drop = $('#drop'), textBox = $('#send-text');
-  const startBtn = $('#send-start'), estimate = $('#estimate');
-
-  function addFiles(list) {
-    for (const f of list) files.push(f);
-    renderFiles();
-  }
-  function renderFiles() {
-    const ul = $('#file-list');
-    ul.textContent = '';
-    files.forEach((f, i) => {
-      const li = document.createElement('li');
-      const name = document.createElement('span'); name.className = 'name'; name.textContent = f.name;
-      const size = document.createElement('span'); size.className = 'size'; size.textContent = fmtBytes(f.size);
-      const x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.textContent = '×';
-      x.setAttribute('aria-label', 'Remove ' + f.name);
-      x.onclick = () => { files.splice(i, 1); renderFiles(); };
-      li.append(name, size, x);
-      ul.append(li);
-    });
-    updateEstimate();
-  }
-  fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
-  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-  drop.addEventListener('drop', (e) => {
-    e.preventDefault(); drop.classList.remove('over');
-    if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
-  });
-  document.addEventListener('paste', (e) => {
-    if (view !== 'send-setup' || !e.clipboardData || !e.clipboardData.files.length) return;
-    e.preventDefault();
-    addFiles(e.clipboardData.files);
-  });
-  textBox.addEventListener('input', updateEstimate);
-
-  for (const r of document.querySelectorAll('input[name="density"]')) {
-    r.checked = r.value === prefs.density;
-    r.addEventListener('change', () => { prefs.density = r.value; savePrefs(); updateEstimate(); });
-  }
-  const fpsRange = $('#fps');
-  fpsRange.value = prefs.fpsIdx;
-  fpsRange.addEventListener('input', () => { prefs.fpsIdx = +fpsRange.value; savePrefs(); updateSpeed(); updateEstimate(); });
-
-  function rawSize() {
-    let n = new TextEncoder().encode(textBox.value).length + 8;
-    for (const f of files) n += f.size + f.name.length + 32;
-    return n;
-  }
-  function updateEstimate() {
-    const has = files.length > 0 || textBox.value.length > 0;
-    startBtn.disabled = !has;
-    if (!has) { estimate.textContent = 'Nothing selected yet.'; return; }
-    const size = rawSize();
-    const B = Beam.blockSizeFor(prefs.density, size);
-    const need = framesNeeded(Math.ceil(size / B));
-    const fps = FPS_STEPS[prefs.fpsIdx];
-    const secs = need / (fps * 0.8);
-    let html = `<b>${fmtBytes(size)}</b> is about <b>${need}</b> frame${need === 1 ? '' : 's'}. ` +
-      `At ${fps}/s that takes roughly <b>${fmtTime(secs)}</b>, or less if it compresses.`;
-    if (size > MAX_SEND) html += ' <br><b>Too big.</b> The limit is 64 MB, and even that would take hours.';
-    else if (secs > 600) html += ' <br>That is a long time to hold a camera still. QR Beam suits text, links and files up to a few MB.';
-    estimate.innerHTML = html;
-    if (size > MAX_SEND) startBtn.disabled = true;
-  }
-
-  startBtn.addEventListener('click', async () => {
-    startBtn.disabled = true;
-    startBtn.textContent = 'Preparing…';
-    try {
-      const t = textBox.value;
-      let item;
-      if (!files.length) item = { text: t };
-      else {
-        const list = await Promise.all(files.map(async (f) => ({
-          name: f.name, type: f.type, data: new Uint8Array(await f.arrayBuffer()),
-        })));
-        if (t.trim()) list.push({ name: 'Note.txt', type: 'text/plain', data: new TextEncoder().encode(t) });
-        item = { files: list };
-      }
-      beginBeam(await Beam.pack(item));
-    } catch (e) {
-      estimate.textContent = 'Could not read that: ' + e.message;
-    } finally {
-      startBtn.textContent = 'Start beaming';
-      updateEstimate();
-    }
-  });
-
-  // ===================== send: beaming =====================
-  const qrCanvas = $('#qr'), qrCtx = qrCanvas.getContext('2d');
-  const tiny = document.createElement('canvas');
-  const qrWrap = $('#qr-wrap');
-  let sender = null;
-
-  function buildQR(seed) {
-    const qr = qrcode(0, 'L');
-    qr.addData(sender.enc.frameText(seed), 'Alphanumeric');
-    qr.make();
-    return qr;
-  }
-  // Paint at 1 px per module, then scale up by a whole number so every module
-  // is the same size on screen.
-  function paintQR(qr) {
-    const n = qrBitmap(qr, tiny, 4), N = n + 8;
-    const dpr = window.devicePixelRatio || 1;
-    const avail = Math.max(64, Math.min(qrWrap.clientWidth - 32, qrWrap.clientHeight - 16)) * dpr;
-    const px = N * Math.max(1, Math.floor(avail / N));
-    if (qrCanvas.width !== px) {
-      qrCanvas.width = qrCanvas.height = px;
-      qrCanvas.style.width = qrCanvas.style.height = px / dpr + 'px';
-    }
-    qrCtx.imageSmoothingEnabled = false;
-    qrCtx.drawImage(tiny, 0, 0, px, px);
-    return n;
-  }
-
-  function beginBeam(payload) {
-    const B = Beam.blockSizeFor(prefs.density, payload.length);
-    const tid = crypto.getRandomValues(new Uint32Array(1))[0];
-    sender = {
-      enc: new Beam.Encoder(payload, B, tid),
-      seed: 0, shown: 0, paused: false, nextAt: 0, modules: 0, raf: 0,
-    };
-    sender.next = buildQR(0);
-    show('sending');
-    keepAwake(true);
-    $('#pause').textContent = 'Pause';
-    updateSpeed();
-    sender.raf = requestAnimationFrame(tick);
-  }
-  function tick(now) {
-    if (!sender) return;
-    sender.raf = requestAnimationFrame(tick);
-    if (sender.paused || now < sender.nextAt) return;
-    const interval = 1000 / FPS_STEPS[prefs.fpsIdx];
-    sender.nextAt = now - sender.nextAt > interval ? now + interval : sender.nextAt + interval;
-    sender.modules = paintQR(sender.next);
-    sender.shown++;
-    sender.seed = (sender.seed + 1) >>> 0;
-    sender.next = buildQR(sender.seed);
-    if (sender.shown % 4 === 1) renderSendStats();
-  }
-  function renderSendStats() {
-    if (!sender) return;
-    const { enc, modules } = sender;
-    const need = framesNeeded(enc.K);
-    const fps = FPS_STEPS[prefs.fpsIdx];
-    $('#send-stats').innerHTML =
-      `<span>frame <b>${sender.shown}</b></span>` +
-      `<span><b>${fmtBytes(enc.len)}</b> in ${enc.K} block${enc.K === 1 ? '' : 's'} of ${enc.B} B</span>` +
-      `<span>QR version ${(modules - 17) / 4} · ${modules}×${modules}</span>` +
-      (enc.K === 1
-        ? '<span>fits in one frame, so it reads instantly</span>'
-        : `<span>receiver needs ~${need} frames · ${fmtTime(need / fps)} at best</span>`);
-  }
-  function updateSpeed() {
-    const fps = FPS_STEPS[prefs.fpsIdx];
-    $('#speed-val').textContent = fps + '/s';
-    $('#fps-label').textContent = fps + ' frames/s';
-    fpsRange.value = prefs.fpsIdx;
-    $('#slower').disabled = prefs.fpsIdx === 0;
-    $('#faster').disabled = prefs.fpsIdx === FPS_STEPS.length - 1;
-    renderSendStats();
-  }
-  $('#slower').onclick = () => { prefs.fpsIdx = Math.max(0, prefs.fpsIdx - 1); savePrefs(); updateSpeed(); };
-  $('#faster').onclick = () => { prefs.fpsIdx = Math.min(FPS_STEPS.length - 1, prefs.fpsIdx + 1); savePrefs(); updateSpeed(); };
-  $('#pause').onclick = () => {
-    if (!sender) return;
-    sender.paused = !sender.paused;
-    $('#pause').textContent = sender.paused ? 'Resume' : 'Pause';
-  };
-  const fsBtn = $('#fullscreen');
-  fsBtn.hidden = !document.fullscreenEnabled;
-  fsBtn.onclick = () => {
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    else $('#view-sending').requestFullscreen().catch(() => {});
-  };
-  document.addEventListener('fullscreenchange', () => {
-    fsBtn.textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
-  });
-  function stopSending() {
-    if (!sender) return;
-    cancelAnimationFrame(sender.raf);
-    sender = null;
-    keepAwake(false);
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  }
-  $('#send-stop').onclick = () => { stopSending(); show('send-setup'); updateEstimate(); };
-
-  // ===================== receive =====================
-  const video = $('#video'), cam = $('#cam'), guide = $('#guide');
-  const grab = document.createElement('canvas');
-  const grabCtx = grab.getContext('2d', { willReadFrequently: true });
-  let rx = null, scanner = null, statsTimer = 0, devices = [];
-
-  function setHint(text, kind) {
-    const h = $('#recv-hint');
-    h.textContent = text || '';
-    h.className = 'hint' + (kind ? ' ' + kind : '');
-  }
-  function showCamError(msg) {
-    const el = $('#cam-error');
-    el.textContent = msg;
-    el.hidden = false;
-    $('#recv-retry').hidden = false;
-  }
-  function stopStream() {
-    if (rx && rx.stream) rx.stream.getTracks().forEach((t) => t.stop());
-    if (rx) rx.stream = null;
-    video.srcObject = null;
-  }
-
-  async function startReceiving() {
-    unlockAudio(); // still inside the tap that got us here
-    stopSending();
-    show('receiving');
-    gridReset();
-    $('#cam-error').hidden = true;
-    $('#recv-retry').hidden = true;
-    $('#meter').className = 'meter';
-    $('#meter i').style.width = '0%';
-    $('#recv-stats').innerHTML = '<span>waiting for the first frame</span>';
-    setHint('');
-    rx = { running: true, gen: 0, decoder: null, recent: [], other: 0, started: 0, lastHit: 0, stream: null, inFlight: 0 };
-    keepAwake(true);
-    clearInterval(statsTimer);
-    statsTimer = setInterval(renderRecvStats, 250);
-    await openCamera();
-  }
-
-  async function openCamera(deviceId) {
-    if (!rx || !rx.running) return;
-    $('#cam-error').hidden = true;
-    $('#recv-retry').hidden = true;
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      showCamError(window.isSecureContext
-        ? 'This browser does not allow camera access.'
-        : 'The camera only works when QR Beam is opened from its https:// link (or as a file on a computer).');
-      return;
-    }
-    stopStream();
-    const gen = ++rx.gen;
-    const v = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } };
-    v.width = { ideal: 1920 };
-    v.height = { ideal: 1080 };
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
-    } catch (e) {
-      showCamError(
-        e.name === 'NotAllowedError' ? 'Camera access is blocked. Allow the camera for this page in your browser settings, then tap Try again.'
-          : e.name === 'NotFoundError' ? 'No camera found on this device.'
-            : 'The camera would not start (' + e.name + '). Close other apps that use it, then tap Try again.');
-      return;
-    }
-    if (!rx || !rx.running || gen !== rx.gen) { stream.getTracks().forEach((t) => t.stop()); return; }
-    rx.stream = stream;
-    video.srcObject = stream;
-    try { await video.play(); } catch (e) { /* autoplay is allowed for muted video */ }
-    if (!video.videoWidth) await new Promise((r) => video.addEventListener('loadedmetadata', r, { once: true }));
-    const settings = stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings() : {};
-    cam.classList.toggle('mirror', settings.facingMode === 'user' || (!settings.facingMode && !isMobile));
-    try {
-      devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
-    } catch (e) { devices = []; }
-    rx.deviceId = settings.deviceId;
-    $('#switch-cam').hidden = devices.length < 2;
-    layoutGuide();
+  // ===================== QR scanning =====================
+  let scanner = null;
+  async function getScanner() {
     if (!scanner) scanner = await makeScanner();
-    if (gen === rx.gen) scanLoop(gen);
+    return scanner;
   }
-  video.addEventListener('resize', layoutGuide);
-
-  function layoutGuide() {
-    const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw || !vh) return;
-    cam.style.setProperty('--ar', vw + ' / ' + vh);
-    cam.style.setProperty('--arn', String(vw / vh));
-    const side = Math.min(vw, vh) * CROP;
-    guide.style.width = (side / vw) * 100 + '%';
-    guide.style.height = (side / vh) * 100 + '%';
-  }
-
-  $('#switch-cam').onclick = () => {
-    if (devices.length < 2) return;
-    const i = devices.findIndex((d) => d.deviceId === rx.deviceId);
-    openCamera(devices[(i + 1) % devices.length].deviceId);
-  };
-
   // Pick the fastest QR reader this browser has.
   async function makeScanner() {
     if ('BarcodeDetector' in window) {
@@ -742,7 +461,6 @@
       },
     };
   }
-
   // jsQR in background threads so several camera frames decode at once.
   function makePool(n) {
     return new Promise((resolve, reject) => {
@@ -786,38 +504,634 @@
     });
   }
 
-  function grabFrame() {
-    const vw = video.videoWidth, vh = video.videoHeight;
-    const side = Math.floor(Math.min(vw, vh) * CROP);
-    const S = Math.min(side, SCAN_MAX);
-    if (grab.width !== S) { grab.width = grab.height = S; }
-    grabCtx.drawImage(video, (vw - side) >> 1, (vh - side) >> 1, side, side, 0, 0, S, S);
-    return grabCtx.getImageData(0, 0, S, S);
+  // ===================== cameras =====================
+  function sq(cx, cy, side) {
+    return { x: Math.round(cx - side / 2), y: Math.round(cy - side / 2), w: Math.round(side), h: Math.round(side) };
+  }
+  function cameraMessage(e) {
+    if (e.name === 'NotAllowedError') return 'Camera access is blocked. Allow the camera for this page in your browser settings, then tap Try again.';
+    if (e.name === 'NotFoundError' || e.name === 'OverconstrainedError') return 'No suitable camera found on this device.';
+    return 'The camera would not start (' + e.name + '). Close other apps that use it, then tap Try again.';
+  }
+  // Runs one camera into a <video> and keeps the QR scanner fed with crops of
+  // its frames. The receiver reads the data stream with one; in two-way mode
+  // the sender reads the receiver's status code with another.
+  function makeCamera(video, { onText, crops, scanMax }) {
+    const cam = { running: false, gen: 0, stream: null, inFlight: 0, turn: 0, facing: 'environment', userFacing: false, deviceId: null, opts: {} };
+    const grab = document.createElement('canvas');
+    const gctx = grab.getContext('2d', { willReadFrequently: true });
+
+    function stopTracks() {
+      if (cam.stream) cam.stream.getTracks().forEach((t) => t.stop());
+      cam.stream = null;
+      video.srcObject = null;
+    }
+    // Resolves to null when running, or to a message saying why not.
+    cam.open = async (opts = {}) => {
+      cam.running = true;
+      cam.opts = opts;
+      const gen = ++cam.gen;
+      stopTracks();
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        return window.isSecureContext
+          ? 'This browser does not allow camera access.'
+          : 'The camera only works when QR Beam is opened from its https:// link (or as a file on a computer).';
+      }
+      if (opts.facing) cam.facing = opts.facing;
+      const v = opts.deviceId ? { deviceId: { exact: opts.deviceId } } : { facingMode: { ideal: cam.facing } };
+      v.width = { ideal: opts.width || 1920 };
+      v.height = { ideal: opts.height || 1080 };
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+      } catch (e) {
+        return gen === cam.gen ? cameraMessage(e) : 'stopped';
+      }
+      if (!cam.running || gen !== cam.gen) { stream.getTracks().forEach((t) => t.stop()); return 'stopped'; }
+      cam.stream = stream;
+      video.srcObject = stream;
+      try { await video.play(); } catch (e) { /* muted video may autoplay */ }
+      if (!video.videoWidth) await new Promise((r) => video.addEventListener('loadedmetadata', r, { once: true }));
+      const track = stream.getVideoTracks()[0];
+      const st = track.getSettings ? track.getSettings() : {};
+      cam.deviceId = st.deviceId;
+      cam.userFacing = st.facingMode === 'user' || (!st.facingMode && !isMobile);
+      await getScanner();
+      if (!cam.running || gen !== cam.gen) return 'stopped';
+      loop(gen);
+      return null;
+    };
+    cam.reopen = () => cam.open(cam.opts);
+    cam.stop = () => { cam.running = false; cam.gen++; stopTracks(); };
+    cam.ended = () => !cam.stream || cam.stream.getVideoTracks().every((t) => t.readyState === 'ended');
+
+    function grabCrop(c) {
+      const k = Math.min(1, scanMax / Math.max(c.w, c.h));
+      const w = Math.max(16, Math.round(c.w * k)), h = Math.max(16, Math.round(c.h * k));
+      if (grab.width !== w || grab.height !== h) { grab.width = w; grab.height = h; }
+      gctx.drawImage(video, c.x, c.y, c.w, c.h, 0, 0, w, h);
+      return gctx.getImageData(0, 0, w, h);
+    }
+    function dispatch(src, gen) {
+      cam.inFlight++;
+      const done = (texts) => { cam.inFlight--; if (cam.running && cam.gen === gen) texts.forEach(onText); };
+      try { Promise.resolve(scanner.scan(src)).then(done, () => done([])); } catch (e) { done([]); }
+    }
+    function loop(gen) {
+      const live = () => cam.running && cam.gen === gen;
+      const next = () => {
+        if (!live()) return;
+        if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFrame);
+        else requestAnimationFrame(onFrame);
+      };
+      function onFrame() {
+        if (!live()) return;
+        next();
+        if (video.readyState < 2 || cam.inFlight >= scanner.slots) return;
+        if (scanner.kind === 'native') { dispatch(video, gen); return; }
+        for (const c of crops(video.videoWidth, video.videoHeight, cam.turn++)) {
+          if (cam.inFlight >= scanner.slots) break;
+          dispatch(grabCrop(c), gen);
+        }
+      }
+      next();
+    }
+    return cam;
   }
 
-  function scanLoop(gen) {
-    const live = () => rx && rx.running && rx.gen === gen;
-    const next = () => {
-      if (!live()) return;
-      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFrame);
-      else requestAnimationFrame(onFrame);
-    };
-    function onFrame() {
-      if (!live()) return;
-      next();
-      if (rx.inFlight >= scanner.slots || video.readyState < 2) return;
-      rx.inFlight++;
-      const done = (texts) => { if (rx) rx.inFlight--; if (live()) texts.forEach(handleText); };
-      try {
-        Promise.resolve(scanner.scan(scanner.kind === 'native' ? video : grabFrame())).then(done, () => done([]));
-      } catch (e) { done([]); }
-    }
-    next();
+  // ===================== send: choosing =====================
+  const items = []; // { file, key, job, prepared }
+  const fileInput = $('#file-input'), drop = $('#drop'), textBox = $('#send-text');
+  const startBtn = $('#send-start'), estimate = $('#estimate');
+
+  // Phone photos are 2-4 MB; a 2048 px JPEG looks the same on a screen at a
+  // fraction of the size, which is the difference between minutes and seconds.
+  const PHOTO = { large: { side: 2048, q: 0.85 }, small: { side: 1280, q: 0.8 } };
+  function isPhoto(f) {
+    return /^image\/(jpeg|png|webp|heic|heif|avif|bmp)$/i.test(f.type) || /\.(heic|heif|jpe?g|png|webp|avif)$/i.test(f.name);
   }
+  async function shrinkImage(file, { side, q }) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode(); // <img> honours EXIF rotation; also decodes HEIC on iPhone
+      const w = img.naturalWidth, h = img.naturalHeight;
+      const k = Math.min(1, side / Math.max(w, h));
+      const cw = Math.max(1, Math.round(w * k)), ch = Math.max(1, Math.round(h * k));
+      const c = document.createElement('canvas');
+      c.width = cw; c.height = ch;
+      c.getContext('2d').drawImage(img, 0, 0, cw, ch);
+      let alpha = false;
+      if (!/jpe?g|heic|heif/i.test(file.type + ' ' + file.name)) {
+        const t = document.createElement('canvas');
+        t.width = t.height = 48;
+        const tc = t.getContext('2d', { willReadFrequently: true });
+        tc.drawImage(c, 0, 0, 48, 48);
+        const d = tc.getImageData(0, 0, 48, 48).data;
+        for (let i = 3; i < d.length; i += 4) if (d[i] < 250) { alpha = true; break; }
+      }
+      const type = alpha ? 'image/png' : 'image/jpeg';
+      const blob = await new Promise((res) => c.toBlob(res, type, q));
+      if (!blob || blob.size >= file.size * 0.9) return null; // not worth it
+      const base = file.name.replace(/\.[^.]+$/, '') || 'photo';
+      return { name: base + (alpha ? '.png' : '.jpg'), type, data: new Uint8Array(await blob.arrayBuffer()) };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  function prepareItem(item) {
+    const mode = isPhoto(item.file) ? prefs.photoSize : 'original';
+    if (item.key === mode) return;
+    item.key = mode;
+    item.prepared = null;
+    item.job = null;
+    if (mode === 'original') return;
+    const job = shrinkImage(item.file, PHOTO[mode]).catch(() => null).then((out) => {
+      if (item.job !== job) return;
+      item.prepared = out;
+      item.job = null;
+      renderFiles();
+    });
+    item.job = job;
+  }
+  function itemSize(item) { return item.prepared ? item.prepared.data.length : item.file.size; }
+
+  function addFiles(list) {
+    for (const f of list) items.push({ file: f, key: null, job: null, prepared: null });
+    renderFiles();
+  }
+  function renderFiles() {
+    const ul = $('#file-list');
+    ul.textContent = '';
+    items.forEach((it, i) => {
+      prepareItem(it);
+      const li = document.createElement('li');
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = it.file.name;
+      const size = document.createElement('span'); size.className = 'size';
+      size.textContent = fmtBytes(it.file.size);
+      if (it.job || it.prepared) {
+        const to = document.createElement('span'); to.className = 'to';
+        to.textContent = it.job ? ' → …' : ' → ' + fmtBytes(it.prepared.data.length);
+        size.append(to);
+      }
+      const x = document.createElement('button'); x.className = 'x'; x.type = 'button'; x.textContent = '×';
+      x.setAttribute('aria-label', 'Remove ' + it.file.name);
+      x.onclick = () => { items.splice(i, 1); renderFiles(); };
+      li.append(name, size, x);
+      ul.append(li);
+    });
+    $('#photo-opts').hidden = !items.some((it) => isPhoto(it.file));
+    updateEstimate();
+  }
+  function clearSendSetup() {
+    items.length = 0;
+    textBox.value = '';
+    renderFiles();
+  }
+  fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  });
+  document.addEventListener('paste', (e) => {
+    if (view !== 'send-setup' || !e.clipboardData || !e.clipboardData.files.length) return;
+    e.preventDefault();
+    addFiles(e.clipboardData.files);
+  });
+  textBox.addEventListener('input', updateEstimate);
+
+  for (const r of document.querySelectorAll('input[name="density"]')) {
+    r.checked = r.value === prefs.density;
+    r.addEventListener('change', () => { prefs.density = r.value; savePrefs(); updateEstimate(); });
+  }
+  for (const r of document.querySelectorAll('input[name="photo"]')) {
+    r.checked = r.value === prefs.photoSize;
+    r.addEventListener('change', () => { prefs.photoSize = r.value; savePrefs(); renderFiles(); });
+  }
+  const twoWayBox = $('#two-way');
+  twoWayBox.checked = prefs.twoWay;
+  twoWayBox.addEventListener('change', () => { prefs.twoWay = twoWayBox.checked; savePrefs(); });
+  const fpsRange = $('#fps');
+  fpsRange.value = prefs.fpsIdx;
+  fpsRange.addEventListener('input', () => { prefs.fpsIdx = +fpsRange.value; savePrefs(); updateSpeed(); updateEstimate(); });
+
+  function rawSize() {
+    let n = new TextEncoder().encode(textBox.value).length + 8;
+    for (const it of items) n += itemSize(it) + it.file.name.length + 32;
+    return n;
+  }
+  function updateEstimate() {
+    const has = items.length > 0 || textBox.value.length > 0;
+    startBtn.disabled = !has;
+    if (!has) { estimate.textContent = 'Nothing selected yet.'; return; }
+    const size = rawSize();
+    const B = Beam.blockSizeFor(prefs.density, size);
+    const need = framesNeeded(Math.ceil(size / B));
+    const fps = FPS_STEPS[prefs.fpsIdx];
+    const secs = need / (fps * 0.8);
+    let html = `<b>${fmtBytes(size)}</b> is about <b>${need}</b> frame${need === 1 ? '' : 's'}. ` +
+      `At ${fps}/s that takes roughly <b>${fmtTime(secs)}</b>, or less if it compresses or you show 2 codes at once.`;
+    if (items.some((it) => it.job)) html += ' <br>Shrinking photos…';
+    if (size > MAX_SEND) html += ' <br><b>Too big.</b> The limit is 64 MB, and even that would take hours.';
+    else if (secs > 600) html += ' <br>That is a long time to hold a camera still. QR Beam suits text, links, photos and files up to a few MB.';
+    estimate.innerHTML = html;
+    if (size > MAX_SEND) startBtn.disabled = true;
+  }
+
+  startBtn.addEventListener('click', async () => {
+    unlockAudio(); // for the "delivered" chime later
+    startBtn.disabled = true;
+    startBtn.textContent = 'Preparing…';
+    try {
+      await Promise.all(items.map((it) => it.job));
+      const t = textBox.value;
+      let item;
+      if (!items.length) item = { text: t };
+      else {
+        const list = await Promise.all(items.map(async (it) => (it.prepared
+          ? { name: it.prepared.name, type: it.prepared.type, data: it.prepared.data }
+          : { name: it.file.name, type: it.file.type, data: new Uint8Array(await it.file.arrayBuffer()) })));
+        if (t.trim()) list.push({ name: 'Note.txt', type: 'text/plain', data: new TextEncoder().encode(t) });
+        item = { files: list };
+      }
+      beginBeam(await Beam.pack(item));
+    } catch (e) {
+      estimate.textContent = 'Could not read that: ' + e.message;
+    } finally {
+      startBtn.textContent = 'Start beaming';
+      updateEstimate();
+    }
+  });
+
+  // ===================== send: beaming =====================
+  const qrCanvas = $('#qr'), qrCtx = qrCanvas.getContext('2d');
+  const tinyA = document.createElement('canvas'), tinyB = document.createElement('canvas');
+  const qrWrap = $('#qr-wrap');
+  const LANE_GAP = 6; // extra modules between two codes, on top of their quiet zones
+  let sender = null, linkTimer = 0;
+
+  // In two-way mode the sender watches the receiver's status code with its
+  // own front camera (the whole frame, since the code can be anywhere in it).
+  const txCam = makeCamera($('#tx-video'), {
+    scanMax: 960,
+    crops: (vw, vh) => [{ x: 0, y: 0, w: vw, h: vh }],
+    onText: onStatusText,
+  });
+
+  // Two codes side by side when the screen is wide enough to keep them big.
+  function lanesFor() {
+    if (prefs.lanes === 1 || prefs.lanes === 2) return prefs.lanes;
+    const w = qrWrap.clientWidth, h = qrWrap.clientHeight;
+    return w >= 900 && w / Math.max(1, h) >= 1.6 ? 2 : 1;
+  }
+  function buildFrame() {
+    const lanes = lanesFor();
+    const flags = (lanes === 2 ? Beam.FLAG_LANES : 0) | (sender.listening ? Beam.FLAG_LISTEN : 0);
+    const qrs = [];
+    for (let i = 0; i < lanes; i++) {
+      const qr = qrcode(0, 'L');
+      qr.addData(sender.enc.frameText((sender.seed + i) >>> 0, flags), 'Alphanumeric');
+      qr.make();
+      qrs.push(qr);
+    }
+    sender.seed = (sender.seed + lanes) >>> 0;
+    return qrs;
+  }
+  // Paint at 1 px per module, then scale up by a whole number so every module
+  // is the same size on screen.
+  function paintFrame(qrs) {
+    const n = qrBitmap(qrs[0], tinyA, 4), N = n + 8, two = qrs.length === 2;
+    if (two) qrBitmap(qrs[1], tinyB, 4);
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.max(64, qrWrap.clientWidth - 32) * dpr, H = Math.max(64, qrWrap.clientHeight - 16) * dpr;
+    const across = two ? 2 * N + LANE_GAP : N;
+    const s = Math.max(1, Math.floor(Math.min(W / across, H / N)));
+    const pw = across * s, ph = N * s;
+    if (qrCanvas.width !== pw || qrCanvas.height !== ph) {
+      qrCanvas.width = pw; qrCanvas.height = ph;
+      qrCanvas.style.width = pw / dpr + 'px';
+      qrCanvas.style.height = ph / dpr + 'px';
+    }
+    qrCtx.imageSmoothingEnabled = false;
+    qrCtx.fillStyle = '#ffffff';
+    qrCtx.fillRect(0, 0, pw, ph);
+    qrCtx.drawImage(tinyA, 0, 0, N * s, N * s);
+    if (two) qrCtx.drawImage(tinyB, (N + LANE_GAP) * s, 0, N * s, N * s);
+    return n;
+  }
+
+  function beginBeam(payload) {
+    stopSending();
+    const B = Beam.blockSizeFor(prefs.density, payload.length);
+    const tid = crypto.getRandomValues(new Uint32Array(1))[0];
+    sender = {
+      enc: new Beam.Encoder(payload, B, tid),
+      seed: 0, shown: 0, paused: false, nextAt: 0, modules: 0, raf: 0, lanes: 1,
+      twoWay: prefs.twoWay, listening: false, auto: false, delivered: false, started: performance.now(),
+      link: { state: 'off', last: 0, st: null, lastAdjust: 0, error: '' },
+    };
+    $('#view-sending').classList.remove('done');
+    $('#delivered').hidden = true;
+    show('sending');
+    keepAwake(true);
+    $('#pause').textContent = 'Pause';
+    sender.next = buildFrame();
+    updateSpeed();
+    updateLanesBtn();
+    $('#link').hidden = !sender.twoWay;
+    $('#tx-meter i').style.width = '0%';
+    if (sender.twoWay) startLink(sender);
+    clearInterval(linkTimer);
+    linkTimer = setInterval(renderLink, 300);
+    sender.raf = requestAnimationFrame(tick);
+  }
+  function tick(now) {
+    if (!sender) return;
+    sender.raf = requestAnimationFrame(tick);
+    if (sender.paused || now < sender.nextAt) return;
+    const interval = 1000 / FPS_STEPS[prefs.fpsIdx];
+    sender.nextAt = now - sender.nextAt > interval ? now + interval : sender.nextAt + interval;
+    sender.modules = paintFrame(sender.next);
+    sender.lanes = sender.next.length;
+    sender.shown++;
+    sender.next = buildFrame();
+    if (sender.shown % 4 === 1) renderSendStats();
+  }
+  function renderSendStats() {
+    if (!sender) return;
+    const { enc, modules, lanes } = sender;
+    const need = framesNeeded(enc.K);
+    const perSec = FPS_STEPS[prefs.fpsIdx] * lanes;
+    $('#send-stats').innerHTML =
+      `<span>frame <b>${sender.shown}</b></span>` +
+      `<span><b>${fmtBytes(enc.len)}</b> in ${enc.K} block${enc.K === 1 ? '' : 's'} of ${enc.B} B</span>` +
+      `<span>QR version ${(modules - 17) / 4} · ${modules}×${modules}${lanes === 2 ? ' · 2 codes per frame' : ''}</span>` +
+      (enc.K === 1
+        ? '<span>fits in one frame, so it reads instantly</span>'
+        : `<span>receiver needs ~${need} codes · ${fmtTime(need / perSec)} at best</span>`);
+  }
+  function updateSpeed() {
+    const fps = FPS_STEPS[prefs.fpsIdx];
+    const sv = $('#speed-val');
+    const auto = !!(sender && sender.auto);
+    sv.textContent = fps + '/s' + (auto ? ' auto' : '');
+    sv.classList.toggle('auto', auto);
+    $('#fps-label').textContent = fps + ' frames/s';
+    fpsRange.value = prefs.fpsIdx;
+    $('#slower').disabled = prefs.fpsIdx === 0;
+    $('#faster').disabled = prefs.fpsIdx === FPS_STEPS.length - 1;
+    renderSendStats();
+  }
+  function manualSpeed(step) {
+    prefs.fpsIdx = Math.max(0, Math.min(FPS_STEPS.length - 1, prefs.fpsIdx + step));
+    if (sender) sender.auto = false;
+    savePrefs();
+    updateSpeed();
+  }
+  $('#slower').onclick = () => manualSpeed(-1);
+  $('#faster').onclick = () => manualSpeed(1);
+  $('#speed-val').onclick = () => {
+    if (!sender || !sender.listening) return;
+    sender.auto = !sender.auto;
+    updateSpeed();
+  };
+  function updateLanesBtn() {
+    const n = lanesFor();
+    $('#lanes').textContent = n === 2 ? '2 codes' : '1 code';
+  }
+  $('#lanes').onclick = () => { prefs.lanes = lanesFor() === 2 ? 1 : 2; savePrefs(); updateLanesBtn(); };
+  window.addEventListener('resize', () => { if (sender) updateLanesBtn(); });
+  $('#pause').onclick = () => {
+    if (!sender) return;
+    sender.paused = !sender.paused;
+    $('#pause').textContent = sender.paused ? 'Resume' : 'Pause';
+  };
+  const fsBtn = $('#fullscreen');
+  fsBtn.hidden = !document.fullscreenEnabled;
+  fsBtn.onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else $('#view-sending').requestFullscreen().catch(() => {});
+  };
+  document.addEventListener('fullscreenchange', () => {
+    fsBtn.textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
+    if (sender) updateLanesBtn();
+  });
+
+  // ----- two-way: the receiver's status code, seen through this camera -----
+  async function startLink(s) {
+    s.link.state = 'starting';
+    renderLink();
+    const err = await txCam.open({ facing: 'user', width: 1280, height: 720 });
+    if (sender !== s || s.delivered) return;
+    if (err) {
+      s.link.state = 'error';
+      s.link.error = err === 'stopped' ? 'the camera stopped.' : err;
+      renderLink();
+      return;
+    }
+    s.listening = true;
+    s.auto = true;
+    s.link.state = 'looking';
+    updateSpeed();
+    renderLink();
+  }
+  function onStatusText(text) {
+    const s = sender;
+    if (!s || s.delivered) return;
+    const st = Beam.parseStatus(text);
+    if (!st) return;
+    const now = performance.now(), L = s.link;
+    L.last = now;
+    L.st = st;
+    if (st.tid !== s.enc.tid) return; // receiver idle, or still on an earlier transfer
+    if (st.done) { delivered(); return; }
+    // Auto speed: the receiver's catch rate covers its last 3 s, so give each
+    // change a little longer than that to show up before judging again.
+    if (s.auto && st.caught != null && st.rate > 0 && now - L.lastAdjust > 3500) {
+      let step = 0;
+      if (st.caught >= 0.93 && prefs.fpsIdx < FPS_STEPS.length - 1) step = 1;
+      else if (st.caught < 0.6 && prefs.fpsIdx > 0) step = -1;
+      if (step) {
+        prefs.fpsIdx += step;
+        L.lastAdjust = now;
+        savePrefs();
+        updateSpeed();
+      }
+    }
+  }
+  function renderLink() {
+    const s = sender;
+    if (!s || !s.twoWay || s.delivered) return;
+    const L = s.link, now = performance.now();
+    let msg, pct = 0;
+    if (L.state === 'starting') msg = 'Two-way: starting the camera…';
+    else if (L.state === 'error') msg = 'One-way only. ' + L.error;
+    else if (!L.st || now - L.last > 3000) {
+      msg = L.st ? 'Lost sight of the receiver’s status code. Keep the screens facing each other.'
+        : 'Two-way: looking for the receiver’s status code. Face the screens toward each other.';
+    } else if (L.st.tid !== s.enc.tid) {
+      msg = L.st.tid ? 'The receiver is still on an earlier transfer.'
+        : 'The receiver is ready but can’t read this code yet. Aim the screens at each other.';
+    } else {
+      pct = L.st.K ? L.st.known / L.st.K : 0;
+      msg = `Receiver has <b>${Math.floor(pct * 100)}%</b>` +
+        (L.st.caught != null ? ` · catching ${Math.round(L.st.caught * 100)}% of codes` : '') +
+        (L.st.rate ? ` · ${((L.st.rate * s.enc.B) / 1024).toFixed(1)} KB/s` : '');
+    }
+    $('#link-line').innerHTML = msg;
+    $('#tx-meter i').style.width = (pct * 100).toFixed(1) + '%';
+  }
+  function delivered() {
+    const s = sender;
+    if (!s || s.delivered) return;
+    s.delivered = true;
+    const secs = (performance.now() - s.started) / 1000;
+    cancelAnimationFrame(s.raf);
+    s.raf = 0;
+    txCam.stop();
+    clearInterval(linkTimer);
+    keepAwake(false);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    $('#view-sending').classList.add('done');
+    $('#delivered').hidden = false;
+    $('#delivered-sum').textContent = `The receiver confirmed all ${fmtBytes(s.enc.len)} after ${fmtTime(secs)}.`;
+    chime();
+    buzz();
+  }
+  function stopSending() {
+    clearInterval(linkTimer);
+    txCam.stop();
+    if (!sender) return;
+    cancelAnimationFrame(sender.raf);
+    sender = null;
+    keepAwake(false);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
+  $('#send-stop').onclick = () => { stopSending(); show('send-setup'); updateEstimate(); };
+  $('#sent-home').onclick = () => { stopSending(); clearSendSetup(); goHome(); };
+  $('#sent-more').onclick = () => { stopSending(); clearSendSetup(); show('send-setup'); };
+
+  // ===================== receive =====================
+  const video = $('#video'), cam = $('#cam');
+  const statusCanvas = $('#status-qr'), statusTiny = document.createElement('canvas');
+  let rx = null, statsTimer = 0;
+
+  // Which parts of the camera frame to decode. One code: the middle square.
+  // Two codes: a square over each half. Not locked on yet: take turns.
+  function rxCrops(vw, vh, turn) {
+    const mid = sq(vw / 2, vh / 2, Math.min(vw, vh) * CROP);
+    const half = Math.min(vw / 2, vh) * 0.96;
+    const left = sq(vw / 4, vh / 2, half), right = sq((3 * vw) / 4, vh / 2, half);
+    const locked = rx && performance.now() - rx.lastHit < 1200;
+    if (locked && rx.lanes === 2) {
+      const list = turn % 2 ? [right, left] : [left, right];
+      if (turn % 6 === 5) list.unshift(mid); // notice if the sender goes back to one code
+      return list;
+    }
+    if (locked) return [mid];
+    const order = [mid, left, mid, right];
+    return order.slice(turn % 4).concat(order.slice(0, turn % 4));
+  }
+  const rxCam = makeCamera(video, { scanMax: SCAN_MAX, crops: rxCrops, onText: handleText });
+
+  function setHint(text, kind) {
+    const h = $('#recv-hint');
+    h.textContent = text || '';
+    h.className = 'hint' + (kind ? ' ' + kind : '');
+  }
+  function showCamError(msg) {
+    const el = $('#cam-error');
+    el.textContent = msg;
+    el.hidden = false;
+    $('#recv-retry').hidden = false;
+  }
+
+  async function startReceiving() {
+    unlockAudio(); // still inside the tap that got us here
+    stopSending();
+    stopReceiving();
+    show('receiving');
+    gridReset();
+    $('#cam-error').hidden = true;
+    $('#recv-retry').hidden = true;
+    $('#meter').className = 'meter';
+    $('#meter i').style.width = '0%';
+    $('#recv-stats').innerHTML = '<span>waiting for the first frame</span>';
+    $('#status-cap').textContent = 'Two-way: the sender reads this code to follow your progress and tune its speed.';
+    $('#cam-tip').textContent = 'Fill the box with the flashing code';
+    cam.classList.remove('lanes2', 'hit');
+    setHint('');
+    rx = {
+      running: true, decoder: null, recent: [], other: 0, started: 0, lastHit: 0,
+      lanes: 1, listening: false, progress: 0, caught: null, rate: 0, lastStatus: '', devices: [],
+    };
+    renderStatus();
+    keepAwake(true);
+    clearInterval(statsTimer);
+    statsTimer = setInterval(renderRecvStats, 250);
+    await openRxCamera();
+  }
+  async function openRxCamera(opts = {}) {
+    if (!rx || !rx.running) return;
+    $('#cam-error').hidden = true;
+    $('#recv-retry').hidden = true;
+    const err = await rxCam.open({ facing: opts.facing || prefs.rxFacing, deviceId: opts.deviceId });
+    if (!rx || !rx.running) return;
+    if (err) { if (err !== 'stopped') showCamError(err); return; }
+    cam.classList.toggle('mirror', rxCam.userFacing);
+    try {
+      rx.devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    } catch (e) { rx.devices = []; }
+    const flip = $('#flip-cam');
+    flip.hidden = !isMobile || rx.devices.length < 2;
+    flip.textContent = rxCam.userFacing ? 'Use back camera' : 'Use front camera (two-way)';
+    $('#switch-cam').hidden = isMobile || rx.devices.length < 2;
+    layoutGuide();
+    renderStatus(true);
+  }
+  video.addEventListener('resize', layoutGuide);
+
+  function layoutGuide() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    cam.style.setProperty('--ar', vw + ' / ' + vh);
+    cam.style.setProperty('--arn', String(vw / vh));
+    const place = (el, c) => {
+      el.style.left = (c.x / vw) * 100 + '%';
+      el.style.top = (c.y / vh) * 100 + '%';
+      el.style.width = (c.w / vw) * 100 + '%';
+      el.style.height = (c.h / vh) * 100 + '%';
+      el.style.transform = 'none';
+    };
+    place($('#guide'), sq(vw / 2, vh / 2, Math.min(vw, vh) * CROP));
+    const half = Math.min(vw / 2, vh) * 0.96;
+    place($('#guide-l'), sq(vw / 4, vh / 2, half));
+    place($('#guide-r'), sq((3 * vw) / 4, vh / 2, half));
+    const two = !!rx && rx.lanes === 2;
+    cam.classList.toggle('lanes2', two);
+    $('#cam-tip').textContent = two ? 'Fit both codes in the frame (turn the phone sideways)' : 'Fill the box with the flashing code';
+  }
+
+  $('#flip-cam').onclick = () => {
+    prefs.rxFacing = rxCam.userFacing ? 'environment' : 'user';
+    savePrefs();
+    openRxCamera({ facing: prefs.rxFacing });
+  };
+  $('#switch-cam').onclick = () => {
+    const list = rx ? rx.devices : [];
+    if (list.length < 2) return;
+    const i = list.findIndex((d) => d.deviceId === rxCam.deviceId);
+    openRxCamera({ deviceId: list[(i + 1) % list.length].deviceId });
+  };
 
   function handleText(text) {
+    if (!rx || !rx.running) return;
     const f = Beam.parseText(text);
     if (!f) {
+      if (Beam.parseStatus(text)) return; // a receiver's status code, not for us
       rx.other++;
       const v = Beam.peekVersion(text);
       if (v && v !== Beam.VERSION) setHint('The other device has a different version of QR Beam. Reload the page on both devices.', 'warn');
@@ -825,7 +1139,9 @@
       return;
     }
     rx.lastHit = performance.now();
-    guide.classList.add('hit');
+    cam.classList.add('hit');
+    rx.listening = f.listening;
+    if (f.lanes !== rx.lanes) { rx.lanes = f.lanes; layoutGuide(); }
     if (!rx.decoder || !rx.decoder.matches(f)) {
       if (rx.decoder) setHint('The sender started a new transfer, so this one started over.', 'warn');
       rx.decoder = new Beam.Decoder(f);
@@ -842,41 +1158,78 @@
   function renderRecvStats() {
     if (!rx || !rx.running) return;
     const now = performance.now();
-    if (now - rx.lastHit > 400) guide.classList.remove('hit');
+    if (now - rx.lastHit > 400) cam.classList.remove('hit');
     const d = rx.decoder;
-    if (!d) return;
-    rx.recent = rx.recent.filter((r) => now - r.t < 3000);
-    const win = rx.recent;
-    let rate = 0, caught = null;
-    if (win.length >= 3) {
-      rate = win.length / Math.max(0.5, (now - win[0].t) / 1000);
-      let lo = Infinity, hi = -Infinity;
-      for (const r of win) { if (r.seed < lo) lo = r.seed; if (r.seed > hi) hi = r.seed; }
-      caught = win.length / (hi - lo + 1);
+    if (d) {
+      rx.recent = rx.recent.filter((r) => now - r.t < 3000);
+      const win = rx.recent;
+      let rate = 0, caught = null;
+      if (win.length >= 3) {
+        rate = win.length / Math.max(0.5, (now - win[0].t) / 1000);
+        let lo = Infinity, hi = -Infinity;
+        for (const r of win) { if (r.seed < lo) lo = r.seed; if (r.seed > hi) hi = r.seed; }
+        caught = Math.min(1, win.length / (hi - lo + 1));
+      }
+      const need = framesNeeded(d.K);
+      const p = Math.max(d.known / d.K, Math.min(0.99, d.received / need));
+      rx.progress = p; rx.caught = caught; rx.rate = rate;
+      $('#meter i').style.width = (p * 100).toFixed(1) + '%';
+      const parts = [
+        `<span><b>${Math.floor(p * 100)}%</b> of ${fmtBytes(d.len)}</span>`,
+        `<span>${d.known} of ${d.K} piece${d.K === 1 ? '' : 's'}</span>`,
+      ];
+      if (rate) {
+        parts.push(`<span>${((rate * d.B) / 1024).toFixed(1)} KB/s</span>`);
+        parts.push(`<span>~${fmtTime(Math.max(0, need - d.received) / rate)} left</span>`);
+      }
+      if (caught != null) parts.push(`<span>catching ${Math.round(caught * 100)}% of codes</span>`);
+      $('#recv-stats').innerHTML = parts.join('');
+      if (now - rx.lastHit > 1500) setHint('Lost the code. Point at the screen and fill the box.', 'warn');
+      else if (caught != null && caught < 0.5) setHint('Missing many codes. Hold steady, move closer, or slow the sender down.', 'warn');
+      else if (caught != null && caught > 0.95 && win.length > 12 && !rx.listening) setHint('Catching almost every code. The sender can go faster.', 'good');
+      else if (caught != null) setHint('');
     }
-    const need = framesNeeded(d.K);
-    const p = Math.max(d.known / d.K, Math.min(0.99, d.received / need));
-    $('#meter i').style.width = (p * 100).toFixed(1) + '%';
-    const parts = [
-      `<span><b>${Math.floor(p * 100)}%</b> of ${fmtBytes(d.len)}</span>`,
-      `<span>${d.known} of ${d.K} piece${d.K === 1 ? '' : 's'}</span>`,
-    ];
-    if (rate) {
-      parts.push(`<span>${((rate * d.B) / 1024).toFixed(1)} KB/s</span>`);
-      parts.push(`<span>~${fmtTime(Math.max(0, need - d.received) / rate)} left</span>`);
+    renderStatus();
+  }
+
+  // ----- two-way: our status code, for the sender's front camera -----
+  // Shown while this camera faces the user (a laptop webcam, or a phone's
+  // front camera), so this screen faces the sender too; hidden again if the
+  // frames say the sender isn't watching.
+  function statusWanted() {
+    return !!rx && rxCam.userFacing && (!rx.decoder || rx.listening);
+  }
+  function renderStatus(force) {
+    const want = statusWanted();
+    $('#status').hidden = !want;
+    $('#view-receiving').classList.toggle('twoway', want);
+    if (!want) return;
+    const d = rx.decoder;
+    const text = Beam.statusText(d
+      ? { done: d.done, tid: d.tid, known: d.done ? d.K : Math.floor(rx.progress * d.K), K: d.K, caught: rx.caught, rate: rx.rate }
+      : { tid: 0, known: 0, K: 0, caught: null, rate: 0 });
+    if (text === rx.lastStatus && !force) return;
+    rx.lastStatus = text;
+    const qr = qrcode(0, 'L');
+    qr.addData(text, 'Alphanumeric');
+    qr.make();
+    const n = qrBitmap(qr, statusTiny, 4), N = n + 8;
+    const dpr = window.devicePixelRatio || 1;
+    const room = Math.min(isMobile ? 360 : 300, ($('#status').clientWidth || 300) - 28);
+    const px = N * Math.max(1, Math.floor((room * dpr) / N));
+    if (statusCanvas.width !== px) {
+      statusCanvas.width = statusCanvas.height = px;
+      statusCanvas.style.width = statusCanvas.style.height = px / dpr + 'px';
     }
-    if (caught != null) parts.push(`<span>catching ${Math.round(Math.min(1, caught) * 100)}% of frames</span>`);
-    $('#recv-stats').innerHTML = parts.join('');
-    if (now - rx.lastHit > 1500) setHint('Lost the code. Point at the screen and fill the box.', 'warn');
-    else if (caught != null && caught < 0.5) setHint('Missing many frames. Hold steady, move closer, or slow the sender down.', 'warn');
-    else if (caught != null && caught > 0.95 && win.length > 12) setHint('Catching almost every frame. The sender can go faster.', 'good');
-    else if (caught != null) setHint('');
+    const c = statusCanvas.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.drawImage(statusTiny, 0, 0, px, px);
   }
 
   function stopReceiving() {
     if (!rx) return;
     rx.running = false;
-    stopStream();
+    rxCam.stop();
     clearInterval(statsTimer);
     keepAwake(false);
   }
@@ -884,7 +1237,13 @@
   async function finishReceive() {
     const d = rx.decoder;
     const secs = (performance.now() - rx.started) / 1000;
+    const twoWay = statusWanted();
     stopReceiving();
+    rx.progress = 1;
+    if (twoWay) {
+      renderStatus(true); // now says "done", so the sender can stop
+      $('#status-cap').textContent = 'Done! Letting the sender know…';
+    }
     $('#meter').className = 'meter done';
     $('#meter i').style.width = '100%';
     let item;
@@ -894,14 +1253,14 @@
       showCamError('Everything arrived but it failed its integrity check (' + e.message + '). Tap Try again to receive it again.');
       return;
     }
-    // Let the grid turn green and the chime play before switching screens.
+    // Let the grid turn green (and the sender see "done") before switching screens.
     grid.done = true;
     grid.dirty = true;
     gridKick();
     chime();
     buzz();
     renderReceived(item, d, secs);
-    setTimeout(() => { if (view === 'receiving') show('received'); }, 800);
+    setTimeout(() => { if (view === 'receiving') show('received'); }, twoWay ? 2500 : 800);
   }
 
   // ===================== received =====================
@@ -1000,12 +1359,12 @@
   }
   $('#home-link').onclick = goHome;
   $('#go-send').onclick = () => { show('send-setup'); updateSpeed(); updateEstimate(); };
-  $('#go-receive').onclick = startReceiving;
+  $('#go-receive').onclick = () => startReceiving();
   $('#send-back').onclick = goHome;
   $('#recv-stop').onclick = goHome;
-  $('#recv-retry').onclick = startReceiving;
+  $('#recv-retry').onclick = () => startReceiving();
   $('#got-home').onclick = goHome;
-  $('#got-again').onclick = startReceiving;
+  $('#got-again').onclick = () => startReceiving();
 
   $('#install-tip').hidden = !(isIOS && !navigator.standalone && location.protocol === 'https:');
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
@@ -1019,6 +1378,6 @@
   // For poking at it from the console or a test harness.
   window.QRBeam = {
     get sender() { return sender; }, get rx() { return rx; }, get scanner() { return scanner; },
-    beginBeam, startReceiving, goHome,
+    rxCam, txCam, beginBeam, startReceiving, goHome,
   };
 })();

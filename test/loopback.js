@@ -15,6 +15,7 @@ export function realTiming() {
 window.runLoop = async function ({
   size = 40000, density = 'normal', fps = 12, loss = 0.2, angle = 3, qrPx = 560, blur = 0.6,
   kind = 'random', extraText = null, name = 'test.bin', type = 'application/octet-stream', bytes = null,
+  lanes = 1, gap = 60,
 } = {}) {
   const data = bytes || new Uint8Array(size);
   if (bytes) { /* caller's own file */ } else if (kind === 'random') {
@@ -33,10 +34,9 @@ window.runLoop = async function ({
   const c = cam.getContext('2d');
   const tiny = document.createElement('canvas'); const tc = tiny.getContext('2d');
   let seed = 0, version = 0;
-  const draw = () => {
-    seed++;
-    if (Math.random() < loss) return; // the camera misses this one entirely
-    const qr = qrcode(0, 'L'); qr.addData(enc.frameText(seed), 'Alphanumeric'); qr.make();
+  const flags = lanes === 2 ? Beam.FLAG_LANES : 0;
+  const paintCode = (s) => {
+    const qr = qrcode(0, 'L'); qr.addData(enc.frameText(s, flags), 'Alphanumeric'); qr.make();
     const n = qr.getModuleCount(), N = n + 8; version = (n - 17) / 4;
     tiny.width = tiny.height = N;
     const img = tc.createImageData(N, N); img.data.fill(255);
@@ -46,10 +46,20 @@ window.runLoop = async function ({
       }
     }
     tc.putImageData(img, 0, 0);
+  };
+  const draw = () => {
+    const first = seed + 1;
+    seed += lanes;
+    if (Math.random() < loss) return; // the camera misses this frame entirely
     c.filter = 'none'; c.fillStyle = '#556'; c.fillRect(0, 0, 1280, 720);
     c.save(); c.translate(640, 360); c.rotate((angle * Math.PI) / 180);
     c.filter = `blur(${blur}px) brightness(0.85) contrast(0.9)`; c.imageSmoothingEnabled = false;
-    c.drawImage(tiny, -qrPx / 2, -qrPx / 2, qrPx, qrPx); c.restore();
+    for (let i = 0; i < lanes; i++) {
+      paintCode(first + i);
+      const x = lanes === 2 ? (i ? gap / 2 : -gap / 2 - qrPx) : -qrPx / 2;
+      c.drawImage(tiny, x, -qrPx / 2, qrPx, qrPx);
+    }
+    c.restore();
   };
   const stream = cam.captureStream(30);
   navigator.mediaDevices.getUserMedia = async () => stream;
