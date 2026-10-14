@@ -1,0 +1,14 @@
+{
+  "name": "QR Beam",
+  "short_name": "QR Beam",
+  "description": "Send files and text between devices with only a screen and a camera.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#eef1f4",
+  "theme_color": "#eef1f4",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
