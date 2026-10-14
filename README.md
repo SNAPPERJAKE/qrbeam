@@ -13,6 +13,11 @@ No Wi-Fi, Bluetooth, pairing, account or server is involved in the transfer.
 3. On the receiving device: **Receive** and fill the on-screen box with the flashing code.
    Missed frames don't matter. It finishes on its own and shows Save / Share / Copy.
 
+On the receiver, a grid shows one square per piece of the file, lit as each piece arrives;
+it chimes (and buzzes, where the phone allows) when the file is complete. The home screen's
+animated code is a real QR Beam stream: point another device's Receive at it for a test message.
+Color, light/dark theme and the chime are under **Look and sound** on the home screen.
+
 Tips
 - Laptop webcam reading a phone screen: use **Easy** density and turn the phone brightness up.
 - Phone camera reading a monitor: **Dense** or **Max**, and raise the speed until the receiver
@@ -34,9 +39,11 @@ Browsers only allow camera access on `https://` pages (or local files on a compu
 
 - `beam.js`: the codec, with no DOM so it also runs under Node.
   - Payload: files/text packed together, then deflate-compressed when that helps.
-  - Cut into fixed-size blocks and sent with an LT fountain code: every frame is the XOR of a
-    seeded random set of blocks, so the receiver can join at any time and miss any frames.
-    It needs about 5-8% more frames than there are blocks (100 blocks or fewer: about K + 2).
+  - Cut into fixed-size blocks. Even frames carry one block as-is, walking through the file;
+    odd frames carry the XOR of a seeded random set of blocks (a fountain code: coin-flip rows for
+    up to 100 blocks, otherwise a robust-soliton degree spread 3x, tuned for the half that
+    arrives plain). The receiver can join at any time and miss any frames, sees pieces land from
+    the first frame, and needs about 3-7% more frames than there are blocks.
   - Decoder: peeling plus Gaussian elimination over GF(2) when peeling stalls.
   - Each frame is base45 text (RFC 9285) in QR alphanumeric mode: 97% efficient, versus 75% for
     base64, and it survives readers that only return text. A CRC32 checks the reassembled payload.

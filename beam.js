@@ -10,15 +10,20 @@
 //   15..18 u32  CRC32 of the whole payload
 //   19..   B bytes: XOR of the source blocks this seed picks (LT fountain code)
 //
-// The payload is cut into K = ceil(len/B) blocks. Every frame carries a random
-// mix of blocks chosen by its seed, so the receiver can start at any point and
-// miss any frames; it finishes after roughly K + a few percent frames.
+// The payload is cut into K = ceil(len/B) blocks. Even seeds carry one block
+// as-is (walking through them in order), odd seeds carry a random mix chosen by
+// the seed. So the receiver can start at any point and miss any frames, sees
+// blocks land from the first frame on, and finishes after roughly K + 4% frames.
 (function (root) {
   'use strict';
 
-  const VERSION = 1;
+  const VERSION = 2;
   const HEADER = 19;
   const DENSE_K = 100;
+  // Mixed frames are drawn as if from K/SPREAD blocks, then spread over SPREAD
+  // times as many. About half the blocks arrive plain, so a mix only has to be
+  // right about the other half; this beat plain soliton by 2-4% in simulation.
+  const SPREAD = 3;
 
   // ---------- base45 (RFC 9285): bytes <-> QR alphanumeric charset ----------
   // QR alphanumeric mode packs 2 chars in 11 bits, so base45 carries 16 bits in
@@ -130,6 +135,7 @@
   // Which source blocks a given seed XORs together. Both ends run this.
   function symbolIndices(seed, K, tid) {
     if (K === 1) return [0];
+    if ((seed & 1) === 0) return [(seed >>> 1) % K];
     const rand = mulberry32(fmix32((seed ^ fmix32(tid + 0x9e3779b9)) >>> 0));
     if (K <= DENSE_K) {
       // Few blocks: coin-flip each one in. Peeling can't untangle these, but
@@ -138,11 +144,12 @@
       while (!out.length) for (let i = 0; i < K; i++) if (rand() < 0.5) out.push(i);
       return out;
     }
-    const cdf = solitonCdf(K);
+    const Kh = Math.max(2, Math.ceil(K / SPREAD));
+    const cdf = solitonCdf(Kh);
     const r = rand();
-    let lo = 1, hi = K;
+    let lo = 1, hi = Kh;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (cdf[mid] < r) lo = mid + 1; else hi = mid; }
-    const d = lo;
+    const d = Math.min(K, lo * SPREAD);
     if (d * 2 > K) {
       const all = Array.from({ length: K }, (_, i) => i);
       for (let i = 0; i < d; i++) {
@@ -210,6 +217,12 @@
     return parseFrame(b45decode(text));
   }
 
+  // Protocol version of a frame that failed to parse, if it looks like one of ours.
+  function peekVersion(text) {
+    const b = typeof text === 'string' && text.length >= 30 ? b45decode(text) : null;
+    return b && b.length >= HEADER + 4 && b[0] >= 1 && b[0] <= 15 ? b[0] : null;
+  }
+
   class Decoder {
     constructor(f) {
       this.tid = f.tid; this.len = f.len; this.B = f.B; this.crc = f.crc;
@@ -265,6 +278,7 @@
         if (this.blocks[i]) continue;
         this.blocks[i] = d;
         this.known++;
+        if (this.onSolved) this.onSolved(i);
         for (const id of this.byIndex[i]) {
           const p = this.pending.get(id);
           if (!p) continue;
@@ -447,7 +461,7 @@
     VERSION, HEADER, DENSITY,
     b45encode, b45decode, b45len, crc32,
     solitonCdf, symbolIndices,
-    Encoder, Decoder, parseFrame, parseText,
+    Encoder, Decoder, parseFrame, parseText, peekVersion,
     pack, unpack, packBody, unpackBody, blockSizeFor,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;

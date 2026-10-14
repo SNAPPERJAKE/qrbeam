@@ -26,6 +26,7 @@ function transfer(payload, B, { loss = 0, startSeed = 0, ge = true, dupes = 0 } 
       const f = Beam.parseText(text);
       if (!dec) { dec = new Beam.Decoder(f); if (!ge) dec._maybeSolve = () => {}; }
       dec.add(f);
+      if (dec.halfKnown == null && dec.received >= encd.K / 2) dec.halfKnown = dec.known / encd.K;
     }
     if (dec.done) break;
     if (shown > encd.K * 20 + 200) throw new Error('never finished');
@@ -124,25 +125,47 @@ function transfer(payload, B, { loss = 0, startSeed = 0, ge = true, dupes = 0 } 
     assert.ok(ok);
   });
 
-  // How many unique frames a receive needs, as a multiple of K.
-  console.log('\nframes needed / K  (200 runs each, 30% loss, random start)');
-  console.log('   K   peel-only avg  p95 | +elimination avg  p95');
-  for (const K of [2, 10, 30, 60, 100, 101, 300, 1000]) {
-    const row = [];
-    for (const ge of [false, true]) {
-      if (!ge && K <= 100) { row.push('-'.padStart(10), '-'.padStart(5)); continue; } // dense rows need elimination
-      const runs = K >= 1000 ? 40 : 200;
-      const ratios = [];
-      for (let i = 0; i < runs; i++) {
-        const p = crypto.randomBytes(K * 16);
-        const r = transfer(p, 16, { loss: 0.3, startSeed: (Math.random() * 1e6) | 0, ge });
-        ratios.push(r.received / K);
-      }
-      ratios.sort((a, b) => a - b);
-      const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
-      row.push(avg.toFixed(2).padStart(10), ratios[Math.floor(ratios.length * 0.95)].toFixed(2).padStart(5));
+  await test('blocks start landing from the first frames, not only at the end', () => {
+    for (const K of [50, 300]) {
+      const enc = new Beam.Encoder(crypto.randomBytes(K * 16), 16, 99);
+      const dec = new Beam.Decoder(Beam.parseFrame(enc.frame(0)));
+      const solved = [];
+      dec.onSolved = (i) => solved.push(i);
+      let s = 12345;
+      while (dec.received < K / 2) { s++; if (Math.random() < 0.3) continue; dec.add(Beam.parseFrame(enc.frame(s))); }
+      assert.ok(dec.known >= K * 0.15, `K=${K}: only ${dec.known} known at half way`);
+      while (!dec.done) { s++; dec.add(Beam.parseFrame(enc.frame(s))); }
+      assert.strictEqual(new Set(solved).size, K, 'onSolved fires once per block');
     }
-    console.log(String(K).padStart(4) + ' ' + row[0] + row[1] + ' | ' + row[2] + row[3]);
+  });
+
+  await test('frames from another protocol version are recognised, not decoded', () => {
+    const enc = new Beam.Encoder(crypto.randomBytes(500), 336, 1);
+    const bytes = enc.frame(3);
+    bytes[0] = 1; // what an older cached copy of the page would send
+    const text = Beam.b45encode(bytes);
+    assert.strictEqual(Beam.parseText(text), null);
+    assert.strictEqual(Beam.peekVersion(text), 1);
+    assert.strictEqual(Beam.peekVersion('HTTPS://EXAMPLE.COM'), null);
+  });
+
+  // How many unique frames a receive needs, as a multiple of K, and how much of
+  // the file is already recovered half way through (what the receiver's grid shows).
+  console.log('\nframes needed / K  (30% loss, random start)');
+  console.log('    K    avg   p95   recovered at half way');
+  for (const K of [2, 10, 30, 100, 101, 300, 1000, 3000]) {
+    const runs = K >= 3000 ? 10 : K >= 1000 ? 40 : 200;
+    const ratios = [], half = [];
+    for (let i = 0; i < runs; i++) {
+      const p = crypto.randomBytes(K * 16);
+      const r = transfer(p, 16, { loss: 0.3, startSeed: (Math.random() * 1e6) | 0 });
+      ratios.push(r.received / K);
+      half.push(r.dec.halfKnown);
+    }
+    ratios.sort((a, b) => a - b);
+    const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    console.log(String(K).padStart(5) + avg(ratios).toFixed(2).padStart(7) +
+      ratios[Math.floor(ratios.length * 0.95)].toFixed(2).padStart(6) + (Math.round(avg(half) * 100) + '%').padStart(10));
   }
 
   console.log(`\n${passed} passed` + (process.exitCode ? ', SOME FAILED' : ''));

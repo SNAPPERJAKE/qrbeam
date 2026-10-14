@@ -22,9 +22,11 @@
   --ink: #111a24;
   --muted: #5b6876;
   --line: #d3dae2;
-  --accent: #e8501a;
+  --accent-l: #cf4510; --accent-d: #ff6a33;
+  --accent-soft-l: #fde5da; --accent-soft-d: #3a1d12;
+  --accent: var(--accent-l);
+  --accent-soft: var(--accent-soft-l);
   --accent-ink: #ffffff;
-  --accent-soft: #fde5da;
   --good: #16824c;
   --warn: #a86a00;
   --bad: #c0312b;
@@ -36,17 +38,22 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0f141a; --surface: #18202a; --ink: #e8edf2; --muted: #93a1b0; --line: #2b3643;
-    --accent: #ff6a33; --accent-ink: #1a0b04; --accent-soft: #3a1d12;
+    --accent: var(--accent-d); --accent-ink: #0f141a; --accent-soft: var(--accent-soft-d);
     --good: #43c483; --warn: #e0a83a; --bad: #ff6b63;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0f141a; --surface: #18202a; --ink: #e8edf2; --muted: #93a1b0; --line: #2b3643;
-  --accent: #ff6a33; --accent-ink: #1a0b04; --accent-soft: #3a1d12;
+  --accent: var(--accent-d); --accent-ink: #0f141a; --accent-soft: var(--accent-soft-d);
   --good: #43c483; --warn: #e0a83a; --bad: #ff6b63;
   color-scheme: dark;
 }
+/* accent choices (Ember is the default above) */
+:root[data-accent="signal"] { --accent-l: #1d5bd8; --accent-d: #6b9bff; --accent-soft-l: #dde7fd; --accent-soft-d: #172645; }
+:root[data-accent="mint"]   { --accent-l: #0d7f57; --accent-d: #3fd39a; --accent-soft-l: #d6f2e6; --accent-soft-d: #12352a; }
+:root[data-accent="violet"] { --accent-l: #6a3bd2; --accent-d: #a888ff; --accent-soft-l: #e8defb; --accent-soft-d: #2a1f47; }
+:root[data-accent="rose"]   { --accent-l: #c8325f; --accent-d: #ff7fa6; --accent-soft-l: #fbdde7; --accent-soft-d: #3f1a28; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -87,7 +94,7 @@ p { margin: 0; }
   background: var(--surface); border: 1px solid var(--line);
 }
 .choice:hover { border-color: var(--accent); }
-.choice svg { width: 34px; height: 34px; color: var(--accent); margin-bottom: auto; }
+.choice svg { width: 34px; height: 34px; color: var(--accent); margin-bottom: 10px; }
 .choice b { font-size: 1.2rem; }
 .choice span { font-size: 0.875rem; color: var(--muted); }
 
@@ -178,6 +185,30 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .card a { color: var(--accent); overflow-wrap: anywhere; }
 .badge { display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--good); }
 
+.hero { display: block; width: 100%; height: 168px; }
+.hero-cap { margin-top: -8px; font: 12px/1.4 var(--font-mono); color: var(--muted); letter-spacing: 0.02em; }
+.grid { display: block; width: 100%; height: 0; }
+.settings { display: grid; gap: 14px; padding: 16px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+.settings h3 { margin: 0; font-size: 1rem; }
+.set-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.set-row > span { font-weight: 600; font-size: 0.95rem; }
+.swatches { display: flex; gap: 10px; }
+.swatches input { position: absolute; opacity: 0; pointer-events: none; }
+.swatches label { width: 30px; height: 30px; border-radius: 50%; cursor: pointer; background: var(--sw); box-shadow: inset 0 0 0 2px rgba(0,0,0,0.12); }
+.swatches input:checked + label { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--sw); }
+.swatches input:focus-visible + label { outline: 3px solid var(--ink); outline-offset: 3px; }
+.seg.three { grid-template-columns: repeat(3, 1fr); min-width: 210px; }
+.seg.three label { padding: 7px 10px; font-size: 0.9rem; font-weight: 600; }
+.switch { position: relative; width: 48px; height: 28px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.switch i { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background 0.15s; }
+.switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.3); transition: transform 0.15s; }
+.switch input:checked + i { background: var(--accent); }
+.switch input:checked + i::after { transform: translateX(20px); }
+.switch input:focus-visible + i { outline: 3px solid var(--accent); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.haptic { position: fixed; left: -100px; top: 0; opacity: 0; pointer-events: none; }
+
 @media (max-width: 420px) {
   .choice { min-height: 132px; padding: 14px; }
   .seg label span { display: none; }
@@ -197,6 +228,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
   <!-- HOME -->
   <main id="view-home" class="col">
+    <canvas class="hero" id="hero" aria-hidden="true"></canvas>
+    <p class="hero-cap">That code is live. Point another device's Receive at it.</p>
     <h1>Move files between devices using only light.</h1>
     <p class="lede">One device flashes a stream of QR codes and the other reads them with its camera. The devices never connect. No Wi-Fi, Bluetooth or account involved.</p>
     <div class="choices">
@@ -217,6 +250,31 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       <li>Tap Receive on the other and fill the box with the flashing code. Missed frames don't matter; it keeps going until it has everything.</li>
     </ol>
     <p class="small" id="install-tip" hidden>On iPhone: tap Share, then <b>Add to Home Screen</b>. After that QR Beam opens and works in airplane mode.</p>
+    <section class="settings" aria-labelledby="settings-title">
+      <h3 id="settings-title">Look and sound</h3>
+      <div class="set-row">
+        <span id="accent-label">Color</span>
+        <div class="swatches" role="radiogroup" aria-labelledby="accent-label">
+          <input type="radio" name="accent" id="a-ember" value="ember"><label for="a-ember" style="--sw:#e8501a" title="Ember"><span class="sr-only">Ember</span></label>
+          <input type="radio" name="accent" id="a-signal" value="signal"><label for="a-signal" style="--sw:#2f6df0" title="Signal"><span class="sr-only">Signal</span></label>
+          <input type="radio" name="accent" id="a-mint" value="mint"><label for="a-mint" style="--sw:#16a46f" title="Mint"><span class="sr-only">Mint</span></label>
+          <input type="radio" name="accent" id="a-violet" value="violet"><label for="a-violet" style="--sw:#7c4ff0" title="Violet"><span class="sr-only">Violet</span></label>
+          <input type="radio" name="accent" id="a-rose" value="rose"><label for="a-rose" style="--sw:#e0457a" title="Rose"><span class="sr-only">Rose</span></label>
+        </div>
+      </div>
+      <div class="set-row">
+        <span id="theme-label">Theme</span>
+        <div class="seg three" role="radiogroup" aria-labelledby="theme-label">
+          <input type="radio" name="theme" id="t-auto" value="auto"><label for="t-auto">Auto</label>
+          <input type="radio" name="theme" id="t-light" value="light"><label for="t-light">Light</label>
+          <input type="radio" name="theme" id="t-dark" value="dark"><label for="t-dark">Dark</label>
+        </div>
+      </div>
+      <div class="set-row">
+        <label for="sound-on">Chime and buzz when a file arrives</label>
+        <span class="switch"><input type="checkbox" id="sound-on"><i></i></span>
+      </div>
+    </section>
   </main>
 
   <!-- SEND SETUP -->
@@ -280,6 +338,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       <div class="tip" id="cam-tip">Fill the box with the flashing code</div>
     </div>
     <div class="alert" id="cam-error" hidden></div>
+    <canvas class="grid" id="grid" aria-hidden="true"></canvas>
     <div class="meter" id="meter"><i></i></div>
     <div class="stats" id="recv-stats"><span>waiting for the first frame</span></div>
     <p class="hint" id="recv-hint"></p>
@@ -302,6 +361,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   </main>
 </div>
 
+<label class="haptic" id="haptic" aria-hidden="true"><input type="checkbox" switch tabindex="-1"></label>
 <script src="vendor/qrcode.js"></script>
 <script src="vendor/jsQR.js"></script>
 <script src="beam.js"></script>
