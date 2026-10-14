@@ -421,7 +421,10 @@ var qrcode = function() {
       return _moduleCount;
     };
 
-    _this.make = function() {
+    // QR Beam: make(maskPattern) picks one of the 8 masks (0-7) instead of the
+    // best-scoring one, so the home screen's code can change look without
+    // changing what it says.
+    _this.make = function(maskPattern) {
       if (_typeNumber < 1) {
         var typeNumber = 1;
 
@@ -449,7 +452,7 @@ var qrcode = function() {
         _typeNumber = typeNumber;
       }
 
-      makeImpl(false, getBestMaskPattern() );
+      makeImpl(false, maskPattern >= 0 && maskPattern < 8 ? maskPattern : getBestMaskPattern() );
     };
 
     _this.createTableTag = function(cellSize, margin) {

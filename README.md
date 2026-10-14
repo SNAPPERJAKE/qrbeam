@@ -15,7 +15,8 @@ No Wi-Fi, Bluetooth, pairing, account or server is involved in the transfer.
 
 On the receiver, a grid shows one square per piece of the file, lit as each piece arrives;
 it chimes (and buzzes, where the phone allows) when the file is complete. The home screen's
-animated code is a real QR Beam stream: point another device's Receive at it for a test message.
+animated code is the link to the site itself: it keeps changing pattern, but any phone camera
+pointed at it opens QR Beam.
 Color, light/dark theme and the chime are under **Look and sound** on the home screen.
 
 **Lock-on:** the receiver no longer needs the code centred or filling a box. It searches the whole

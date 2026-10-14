@@ -131,23 +131,20 @@
   }
 
   // ===================== home: the beam animation =====================
-  // A monitor flashing a real QR Beam stream (a short hello), light flying
-  // across, and a phone whose grid fills block by block. Point a second
-  // device's Receive at it and the message really arrives.
+  // A monitor flashing the link to this very page, light flying across, and
+  // a phone whose grid fills block by block. The code keeps changing (it
+  // steps through the eight QR mask patterns) but every frame reads the same
+  // link, so any phone camera pointed at it opens QR Beam.
   const hero = $('#hero'), heroCtx = hero.getContext('2d');
   const heroQR = document.createElement('canvas');
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
-  const HERO_MSG = 'Hello from the QR Beam home screen. This message came across by light alone.';
+  const HOME_URL = 'https://snapperjake.github.io/qrbeam/';
   const HERO_COLS = 4, HERO_ROWS = 7;
   const hs = {
-    enc: null, seed: 0, raf: 0, nextFlip: 0, W: 0, H: 0, L: null,
+    mask: 0, raf: 0, nextFlip: 0, W: 0, H: 0, L: null,
     parts: [], lit: new Float64Array(HERO_COLS * HERO_ROWS), litCount: 0, fullAt: 0,
   };
-  Beam.pack({ text: HERO_MSG }).then((p) => {
-    hs.enc = new Beam.Encoder(p, Beam.blockSizeFor('easy', p.length), 0x51b3a3);
-    heroFlipQR();
-    heroDrawStill();
-  });
+  heroFlipQR();
 
   function heroLayout() {
     const W = hero.clientWidth, H = hero.clientHeight;
@@ -167,10 +164,10 @@
     return true;
   }
   function heroFlipQR() {
-    if (!hs.enc) return;
-    const qr = qrcode(0, 'L');
-    qr.addData(hs.enc.frameText(hs.seed++), 'Alphanumeric');
-    qr.make();
+    const qr = qrcode(0, 'M');
+    qr.addData(HOME_URL);
+    qr.make(hs.mask);
+    hs.mask = (hs.mask + 1) % 8;
     qrBitmap(qr, heroQR, 2);
   }
   function roundRect(ctx, x, y, w, h, r) {
